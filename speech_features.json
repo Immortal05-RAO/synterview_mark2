@@ -1,0 +1,16 @@
+{
+  "total_words": 378,
+  "duration_seconds": 136.0,
+  "words_per_minute": 166.76,
+  "filler_words": 8,
+  "filler_rate": 0.0212,
+  "repeated_words": 0,
+  "pause_count": 2,
+  "long_pause_count": 2,
+  "average_pause_seconds": 7.5,
+  "longest_pause_seconds": 13.0,
+  "long_pauses": [
+    2.0,
+    13.0
+  ]
+}

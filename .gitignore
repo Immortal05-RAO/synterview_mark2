@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+env/
+.pytest_cache/
+
+# Environment / Secret keys
+.env
+.env.local
+*.env
+
+# SQLite / Database
+*.db
+*.sqlite3
+
+# Media and Uploads
+uploads/
+interview.mp4
+*.mp4
+*.wav
+*.mp3
+*.m4a
+
+# Node / Frontend
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/dist-ssr/
+*.log
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

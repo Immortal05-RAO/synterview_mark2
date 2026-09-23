@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.git/
+.gitignore
+.env
+uploads/
+synterview.db
+interview.mp4
+test_whisper.py
+diarize.py
+speech_features.json
+.pytest_cache/
+tests/
