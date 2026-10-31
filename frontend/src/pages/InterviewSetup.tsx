@@ -33,7 +33,7 @@ export const InterviewSetupPage: React.FC = () => {
       navigate(`/interview/${interviewId}`);
     } catch (error) {
       console.error('Failed to create/start interview session:', error);
-      navigate(`/interview/demo-session-id`);
+      window.alert('Could not start the interview. Please check your connection and try again.');
     } finally {
       setIsLoading(false);
     }

@@ -37,6 +37,8 @@ from src.middleware.error_handler import APIException
 
 logger = logging.getLogger("synterview")
 
+ALLOWED_AUDIO_EXTENSIONS = {".webm", ".wav", ".mp3", ".m4a", ".mp4", ".ogg", ".oga", ".flac"}
+
 router = APIRouter(prefix="/api/interviews", tags=["Interviews"])
 
 
@@ -204,7 +206,6 @@ async def submit_answer(
     question_id = None
     answer_text = None
     transcript_text = None
-    audio_file_path = None
     duration_seconds = 0.0
     segments = []
 
@@ -217,16 +218,25 @@ async def submit_answer(
         audio_file: Optional[UploadFile] = form.get("audio")
 
         if audio_file:
-            # Save audio securely to temporary directory
-            temp_filename = f"{uuid.uuid4()}_{audio_file.filename}"
-            temp_path = os.path.join(settings.UPLOAD_DIR, temp_filename)
+            content = await audio_file.read()
+            max_bytes = settings.MAX_UPLOAD_MB * 1024 * 1024
+            if len(content) > max_bytes:
+                raise APIException(
+                    status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                    "AUDIO_TOO_LARGE",
+                    f"Audio file exceeds the {settings.MAX_UPLOAD_MB} MB limit"
+                )
+
+            # Never use the client-supplied filename for the path; keep only a safe extension
+            ext = os.path.splitext(os.path.basename(audio_file.filename or ""))[1].lower()
+            if ext not in ALLOWED_AUDIO_EXTENSIONS:
+                ext = ".webm"
+            temp_path = os.path.join(settings.UPLOAD_DIR, f"{uuid.uuid4()}{ext}")
 
             with open(temp_path, "wb") as f:
-                content = await audio_file.read()
                 f.write(content)
 
-            logger.info(f"[AUDIO] Received audio file: {audio_file.filename} ({len(content)} bytes)")
-            audio_file_path = temp_path
+            logger.info(f"[AUDIO] Received audio upload ({len(content)} bytes)")
 
             # Process with STT Provider
             try:
@@ -235,7 +245,7 @@ async def submit_answer(
                 transcript_text = stt_result.get("transcript", "")
                 duration_seconds = stt_result.get("duration_seconds", 0.0)
                 segments = stt_result.get("segments", [])
-                logger.info(f"[STT] Extracted transcript: '{transcript_text}' (duration: {duration_seconds}s)")
+                logger.info(f"[STT] Extracted {len(transcript_text)} chars (duration: {duration_seconds}s)")
             finally:
                 # Always clean up temporary audio file after processing
                 if os.path.exists(temp_path):
@@ -266,7 +276,6 @@ async def submit_answer(
         question=current_q,
         answer_text=answer_text,
         transcript=transcript_text,
-        audio_path=audio_file_path,
         duration_seconds=duration_seconds,
         segments=segments
     )

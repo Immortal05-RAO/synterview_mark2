@@ -40,8 +40,8 @@ SQLAlchemy DB   Cloud STT API     AI Provider API
 ### 2. Installation
 ```bash
 # Clone the repository
-git clone https://github.com/your-username/synterview-ai.git
-cd synterview-ai
+git clone https://github.com/Immortal05-RAO/synterview_mark2.git
+cd synterview_mark2
 
 # Activate virtual environment (Windows)
 .\.venv\Scripts\activate
@@ -57,15 +57,15 @@ ENVIRONMENT=development
 PORT=5000
 DATABASE_URL=sqlite:///./synterview.db
 
-JWT_SECRET=synterview-super-secret-jwt-key-2026-demo
-JWT_REFRESH_SECRET=synterview-super-secret-refresh-key-2026-demo
+JWT_SECRET=change-me
+JWT_REFRESH_SECRET=change-me-too
 
 # AI Provider: openai, gemini, or fallback
 AI_PROVIDER=openai
 AI_MODEL=gpt-4o-mini
 AI_API_KEY=your_openai_api_key_here
 
-# Speech Provider: openai or fallback
+# Speech Provider: openai, local or fallback (SPEECH_API_KEY defaults to AI_API_KEY when AI_PROVIDER=openai)
 SPEECH_PROVIDER=openai
 SPEECH_API_KEY=your_openai_api_key_here
 
@@ -164,6 +164,8 @@ If external AI API keys are omitted or external services fail, Synterview automa
 ---
 
 ## 🛡️ Security & Privacy
-- Passwords hashed using `bcrypt` (72-byte salt truncated utf-8).
+- Passwords hashed using `bcrypt` (72-byte salt truncated utf-8); refresh tokens are stored SHA-256 hashed.
+- In `ENVIRONMENT=production` the server refuses to start with the default demo JWT secrets.
+- Without a real STT engine, audio yields an empty transcript (a canned one is only used when `DEMO_MODE=true`).
 - Access tokens valid for 15 minutes; Refresh tokens valid for 7 days.
-- Temporary audio uploads processed and unlinked from filesystem immediately after transcription.
+- Temporary audio uploads (limited by `MAX_UPLOAD_MB`) processed and unlinked from filesystem immediately after transcription.

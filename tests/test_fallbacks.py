@@ -35,7 +35,9 @@ async def test_fallback_ai_evaluation():
 
 
 @pytest.mark.asyncio
-async def test_fallback_speech_provider(tmp_path):
+async def test_fallback_speech_provider(tmp_path, monkeypatch):
+    from src.config import settings
+    monkeypatch.setattr(settings, "DEMO_MODE", True)
     # Create a temporary dummy audio file
     dummy_audio = tmp_path / "sample.mp3"
     dummy_audio.write_bytes(b"0" * 32000)
@@ -53,3 +55,15 @@ async def test_fallback_speech_provider(tmp_path):
     assert metrics["words_per_minute"] > 0
     assert "filler_words" in metrics
     assert "pause_count" in metrics
+
+
+@pytest.mark.asyncio
+async def test_fallback_speech_provider_does_not_fabricate_outside_demo(tmp_path, monkeypatch):
+    from src.config import settings
+    monkeypatch.setattr(settings, "DEMO_MODE", False)
+    dummy_audio = tmp_path / "sample.mp3"
+    dummy_audio.write_bytes(b"0" * 32000)
+
+    res = await FallbackSpeechProvider().transcribe_audio(str(dummy_audio))
+    assert res["transcript"] == ""
+    assert res["segments"] == []

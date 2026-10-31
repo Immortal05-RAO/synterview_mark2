@@ -24,7 +24,7 @@ class SpeechToTextProvider(ABC):
 
 class OpenAISpeechProvider(SpeechToTextProvider):
     def __init__(self, api_key: str = None):
-        self.api_key = api_key or settings.AI_API_KEY
+        self.api_key = api_key or settings.openai_speech_key
         self.endpoint = "https://api.openai.com/v1/audio/transcriptions"
 
     async def transcribe_audio(self, file_path: str) -> Dict[str, Any]:
@@ -82,8 +82,8 @@ class LocalWhisperSpeechProvider(SpeechToTextProvider):
     def get_model(cls):
         if cls._model is None:
             import whisper
-            logger.info("Loading local Whisper STT model ('tiny')...")
-            cls._model = whisper.load_model("tiny")
+            logger.info(f"Loading local Whisper STT model ('{settings.WHISPER_MODEL}')...")
+            cls._model = whisper.load_model(settings.WHISPER_MODEL)
         return cls._model
 
     async def transcribe_audio(self, file_path: str) -> Dict[str, Any]:
@@ -121,37 +121,42 @@ class LocalWhisperSpeechProvider(SpeechToTextProvider):
 class FallbackSpeechProvider(SpeechToTextProvider):
     async def transcribe_audio(self, file_path: str) -> Dict[str, Any]:
         """
-        Fallback speech provider used when cloud and local STT engines are unavailable.
-        Returns sample transcript for non-empty audio files.
+        Used when no real STT engine is available.
+        Only DEMO_MODE returns a canned transcript; otherwise the transcript is empty so
+        the caller can fall back to the typed answer or report that no speech was detected
+        instead of scoring made-up text.
         """
-        file_size = os.path.getsize(file_path) if os.path.exists(file_path) else 0
-        estimated_duration = max(1.0, round(file_size / 16000.0, 2)) if file_size > 0 else 0.0
+        empty = {"transcript": "", "duration_seconds": 0.0, "segments": []}
+        if not settings.DEMO_MODE:
+            logger.warning("No speech-to-text engine available; returning an empty transcript.")
+            return empty
 
+        file_size = os.path.getsize(file_path) if os.path.exists(file_path) else 0
+        if file_size <= 0:
+            return empty
+
+        estimated_duration = max(1.0, round(file_size / 16000.0, 2))
         sample_transcript = (
             "Thank you for the question. In my response I explained the core technical architecture and trade-offs."
-            if file_size > 0 else ""
         )
-
-        segments = [
-            {"start": 0.0, "end": estimated_duration, "text": sample_transcript}
-        ] if file_size > 0 else []
-
         return {
             "transcript": sample_transcript,
             "duration_seconds": estimated_duration,
-            "segments": segments
+            "segments": [{"start": 0.0, "end": estimated_duration, "text": sample_transcript}],
         }
 
 
 def get_speech_provider() -> SpeechToTextProvider:
-    provider_type = getattr(settings, "SPEECH_PROVIDER", "openai").lower()
-    if provider_type == "openai" and settings.AI_API_KEY and not settings.DEMO_MODE:
-        return OpenAISpeechProvider(api_key=settings.AI_API_KEY)
+    provider_type = settings.SPEECH_PROVIDER.lower()
+    if settings.DEMO_MODE or provider_type == "fallback":
+        return FallbackSpeechProvider()
+
+    if provider_type == "openai" and settings.openai_speech_key:
+        return OpenAISpeechProvider(api_key=settings.openai_speech_key)
 
     try:
-        import whisper
+        import whisper  # noqa: F401
         return LocalWhisperSpeechProvider()
     except Exception as e:
         logger.warning(f"Local whisper unavailable ({e}). Falling back to FallbackSpeechProvider.")
         return FallbackSpeechProvider()
-

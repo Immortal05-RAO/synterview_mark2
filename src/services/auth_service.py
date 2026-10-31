@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+import hashlib
 import jwt
 import bcrypt
 from fastapi import Depends, Header, status
@@ -26,6 +27,11 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
         return bcrypt.checkpw(pwd_bytes, hash_bytes)
     except Exception:
         return False
+
+
+def hash_token(token: str) -> str:
+    """Refresh tokens are stored hashed so a DB leak does not expose usable tokens."""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:

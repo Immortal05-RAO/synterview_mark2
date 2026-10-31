@@ -7,18 +7,18 @@ import { QuestionBreakdown } from '../components/report/QuestionBreakdown';
 import { AIInsights } from '../components/report/AIInsights';
 import { interviewsApi } from '../api/interviews';
 import type { ReportData } from '../api/interviews';
-import { mockReportData } from '../mock/report';
 
 export const InterviewReportPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [report, setReport] = useState<ReportData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
 
   useEffect(() => {
     const fetchReport = async () => {
-      if (!id || id === 'demo-session-id') {
-        setReport(mockReportData);
+      if (!id) {
+        setError(true);
         setLoading(false);
         return;
       }
@@ -28,10 +28,10 @@ export const InterviewReportPage: React.FC = () => {
         if (res.success) {
           setReport(res.report);
         } else {
-          setReport(mockReportData);
+          setError(true);
         }
       } catch {
-        setReport(mockReportData);
+        setError(true);
       } finally {
         setLoading(false);
       }
@@ -39,6 +39,17 @@ export const InterviewReportPage: React.FC = () => {
 
     fetchReport();
   }, [id]);
+
+  if (!loading && (error || !report)) {
+    return (
+      <div className="h-64 flex flex-col items-center justify-center gap-3 text-slate-500 font-medium text-xs">
+        <span>We could not load this report.</span>
+        <button onClick={() => navigate('/dashboard')} className="font-semibold text-[#FF6B00]">
+          Back to Dashboard
+        </button>
+      </div>
+    );
+  }
 
   if (loading || !report) {
     return (

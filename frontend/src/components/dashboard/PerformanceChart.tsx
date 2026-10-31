@@ -12,8 +12,8 @@ import {
 interface TrendPoint {
   session: string;
   overall: number;
-  technical: number;
-  communication: number;
+  technical?: number;
+  communication?: number;
 }
 
 interface PerformanceChartProps {
@@ -22,6 +22,8 @@ interface PerformanceChartProps {
 
 export const PerformanceChart: React.FC<PerformanceChartProps> = ({ data = [] }) => {
   const hasData = data && data.length > 0;
+  const hasTechnical = hasData && data.some((d) => d.technical !== undefined);
+  const hasCommunication = hasData && data.some((d) => d.communication !== undefined);
 
   return (
     <div className="bg-white p-6 rounded-2xl border border-slate-200/80 shadow-sm flex flex-col justify-between h-[360px]">
@@ -38,14 +40,18 @@ export const PerformanceChart: React.FC<PerformanceChartProps> = ({ data = [] })
             <span className="w-2.5 h-2.5 rounded-full bg-[#FF6B00]" />
             <span className="text-slate-600">Overall</span>
           </div>
-          <div className="flex items-center gap-1.5">
-            <span className="w-2.5 h-2.5 rounded-full bg-purple-500" />
-            <span className="text-slate-600">Technical</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
-            <span className="text-slate-600">Communication</span>
-          </div>
+          {hasTechnical && (
+            <div className="flex items-center gap-1.5">
+              <span className="w-2.5 h-2.5 rounded-full bg-purple-500" />
+              <span className="text-slate-600">Technical</span>
+            </div>
+          )}
+          {hasCommunication && (
+            <div className="flex items-center gap-1.5">
+              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
+              <span className="text-slate-600">Communication</span>
+            </div>
+          )}
         </div>
       </div>
 
@@ -69,19 +75,11 @@ export const PerformanceChart: React.FC<PerformanceChartProps> = ({ data = [] })
                 labelStyle={{ fontWeight: 'bold', color: '#1e293b' }}
               />
               <Line type="monotone" dataKey="overall" stroke="#FF6B00" strokeWidth={3} dot={{ r: 4, fill: '#FF6B00' }} activeDot={{ r: 6 }} />
-              <Line type="monotone" dataKey="technical" stroke="#A855F7" strokeWidth={2.5} dot={{ r: 3, fill: '#A855F7' }} />
-              <Line type="monotone" dataKey="communication" stroke="#22C55E" strokeWidth={2.5} dot={{ r: 3, fill: '#22C55E' }} />
+              {hasTechnical && <Line type="monotone" dataKey="technical" stroke="#A855F7" strokeWidth={2.5} dot={{ r: 3, fill: '#A855F7' }} />}
+              {hasCommunication && <Line type="monotone" dataKey="communication" stroke="#22C55E" strokeWidth={2.5} dot={{ r: 3, fill: '#22C55E' }} />}
             </LineChart>
           </ResponsiveContainer>
         )}
-      </div>
-
-      {/* Demo watermark banner */}
-      <div className="mt-3 text-center">
-        <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-slate-400 bg-slate-100 px-3 py-0.5 rounded-full">
-          <span className="w-1.5 h-1.5 rounded-full bg-[#FF6B00]" />
-          Demo Mode — Simulated AI responses
-        </span>
       </div>
     </div>
   );

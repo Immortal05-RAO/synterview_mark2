@@ -7,7 +7,7 @@ import { SessionSummary } from '../components/dashboard/SessionSummary';
 import { useAuth } from '../context/AuthContext';
 import { interviewsApi } from '../api/interviews';
 import type { InterviewConfig } from '../api/interviews';
-import { mockDashboardData } from '../mock/dashboard';
+import { buildTrend } from '../utils/trend';
 
 export const DashboardPage: React.FC = () => {
   const navigate = useNavigate();
@@ -22,13 +22,13 @@ export const DashboardPage: React.FC = () => {
           setInterviews(res.interviews);
         }
       } catch {
-        // Fallback to empty list or mock list
+        // Leave the list empty if the request fails
       }
     };
     fetchInterviews();
   }, []);
 
-  const firstName = user?.name ? user.name.split(' ')[0] : 'Shashwat';
+  const firstName = user?.name ? user.name.split(' ')[0] : 'there';
   const totalCompleted = interviews.filter((i) => i.status === 'COMPLETED').length;
 
   const validScores = interviews
@@ -48,7 +48,7 @@ export const DashboardPage: React.FC = () => {
             Good morning, {firstName} 👋
           </h2>
           <p className="text-xs font-medium text-slate-500 mt-1">
-            You have {totalCompleted > 0 ? totalCompleted : 2} practice sessions scheduled this week.
+            You have completed {totalCompleted} practice session{totalCompleted === 1 ? '' : 's'} so far.
           </p>
         </div>
 
@@ -103,7 +103,7 @@ export const DashboardPage: React.FC = () => {
       {/* Main Grid: Performance Trend + Session Summary */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2">
-          <PerformanceChart data={totalCompleted > 0 ? mockDashboardData.trendData : []} />
+          <PerformanceChart data={buildTrend(interviews)} />
         </div>
         <div className="lg:col-span-1">
           <SessionSummary />

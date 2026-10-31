@@ -3,6 +3,8 @@ import logging
 from typing import Dict, Any, Optional
 from sqlalchemy.orm import Session
 
+from fastapi import status
+from src.middleware.error_handler import APIException
 from src.models.interview import Interview, Question, InterviewStatus
 from src.models.evaluation import Answer, SpeechMetrics, Evaluation
 from src.services.ai_service import get_ai_provider
@@ -17,7 +19,6 @@ async def process_and_evaluate_answer(
     question: Question,
     answer_text: Optional[str],
     transcript: Optional[str],
-    audio_path: Optional[str],
     duration_seconds: float,
     segments: Optional[list] = None
 ) -> Dict[str, Any]:
@@ -49,7 +50,7 @@ async def process_and_evaluate_answer(
         question_id=question.id,
         text=answer_text,
         transcript=transcript,
-        audio_path=audio_path,
+        audio_path=None,  # temp audio is deleted after transcription
         duration_seconds=metrics_data["duration_seconds"]
     )
     db.add(db_answer)
@@ -86,8 +87,20 @@ async def process_and_evaluate_answer(
     )
     db.add(db_eval)
 
-    # Increment question index
-    interview.current_question_index += 1
+    # Atomically claim this question slot so concurrent submissions cannot both answer it
+    expected_index = interview.current_question_index
+    claimed = db.query(Interview).filter(
+        Interview.id == interview.id,
+        Interview.current_question_index == expected_index
+    ).update({Interview.current_question_index: expected_index + 1}, synchronize_session=False)
+    if not claimed:
+        db.rollback()
+        raise APIException(
+            status.HTTP_409_CONFLICT,
+            "ANSWER_ALREADY_SUBMITTED",
+            "This question has already been answered"
+        )
+    db.refresh(interview)
     total_q = len(interview.questions)
 
     completed = False
@@ -103,9 +116,10 @@ async def process_and_evaluate_answer(
         sorted_qs = sorted(interview.questions, key=lambda q: q.order)
         next_q = sorted_qs[interview.current_question_index]
 
-    logger.info(f"[EVALUATION] Question: '{question.text}'")
-    logger.info(f"[EVALUATION] Answer: '{effective_answer}'")
-    logger.info(f"[EVALUATION] Scores: {eval_data}")
+    db.commit()
+    db.refresh(interview)
+
+    logger.info(f"[EVALUATION] Scored answer ({len(effective_answer)} chars): {eval_data.get('overallScore')}")
 
     return {
         "completed": completed,

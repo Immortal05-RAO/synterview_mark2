@@ -17,6 +17,7 @@ from src.services.auth_service import (
     create_access_token,
     create_refresh_token,
     decode_refresh_token,
+    hash_token,
     get_current_user
 )
 from src.middleware.error_handler import APIException
@@ -49,7 +50,7 @@ def register(user_data: UserRegister, db: Session = Depends(get_db)):
     access_token = create_access_token({"sub": new_user.id})
     refresh_token = create_refresh_token({"sub": new_user.id})
 
-    new_user.refresh_token = refresh_token
+    new_user.refresh_token = hash_token(refresh_token)
     db.commit()
 
     return TokenResponse(
@@ -73,7 +74,7 @@ def login(credentials: UserLogin, db: Session = Depends(get_db)):
     access_token = create_access_token({"sub": user.id})
     refresh_token = create_refresh_token({"sub": user.id})
 
-    user.refresh_token = refresh_token
+    user.refresh_token = hash_token(refresh_token)
     db.commit()
 
     return TokenResponse(
@@ -96,7 +97,7 @@ def refresh_token(token_data: TokenRefreshRequest, db: Session = Depends(get_db)
         )
 
     user = db.query(User).filter(User.id == user_id).first()
-    if not user or user.refresh_token != token_data.refreshToken:
+    if not user or user.refresh_token != hash_token(token_data.refreshToken):
         raise APIException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             code="INVALID_TOKEN",
@@ -106,7 +107,7 @@ def refresh_token(token_data: TokenRefreshRequest, db: Session = Depends(get_db)
     new_access_token = create_access_token({"sub": user.id})
     new_refresh_token = create_refresh_token({"sub": user.id})
 
-    user.refresh_token = new_refresh_token
+    user.refresh_token = hash_token(new_refresh_token)
     db.commit()
 
     return TokenResponse(

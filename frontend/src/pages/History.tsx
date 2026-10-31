@@ -16,20 +16,7 @@ export const HistoryPage: React.FC = () => {
         setInterviews(res.interviews);
       }
     } catch {
-      // Fallback mock history list
-      setInterviews([
-        {
-          id: 'demo-session-id',
-          role: 'Software Engineer',
-          experience: 'Fresher',
-          difficulty: 'Medium',
-          interviewType: 'Technical',
-          numberOfQuestions: 5,
-          status: 'COMPLETED',
-          overallScore: 82,
-          createdAt: new Date().toISOString(),
-        },
-      ]);
+      setInterviews([]);
     } finally {
       setLoading(false);
     }
@@ -46,7 +33,7 @@ export const HistoryPage: React.FC = () => {
         await interviewsApi.delete(id);
         setInterviews(interviews.filter((i) => i.id !== id));
       } catch {
-        setInterviews(interviews.filter((i) => i.id !== id));
+        window.alert('Could not delete this interview. Please try again.');
       }
     }
   };

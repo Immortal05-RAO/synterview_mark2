@@ -53,7 +53,8 @@ else:
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allow_origins,
-    allow_credentials=True,
+    # Auth uses Bearer tokens (no cookies), so credentials are only needed for explicit origins
+    allow_credentials="*" not in origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
