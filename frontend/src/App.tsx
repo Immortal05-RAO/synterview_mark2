@@ -1,6 +1,6 @@
 import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { AuthProvider } from './context/AuthContext';
+import { AuthProvider, useAuth } from './context/AuthContext';
 import { Layout } from './components/layout/Layout';
 import { DashboardPage } from './pages/Dashboard';
 import { InterviewSetupPage } from './pages/InterviewSetup';
@@ -14,6 +14,14 @@ import { SettingsPage } from './pages/Settings';
 import { LoginPage } from './pages/Login';
 import { RegisterPage } from './pages/Register';
 
+const RequireAuth: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { user, isLoading } = useAuth();
+  if (isLoading) {
+    return <div className="h-screen flex items-center justify-center text-slate-400 text-xs font-medium">Loading...</div>;
+  }
+  return user ? <>{children}</> : <Navigate to="/login" replace />;
+};
+
 export const App: React.FC = () => {
   return (
     <AuthProvider>
@@ -25,6 +33,7 @@ export const App: React.FC = () => {
           <Route
             path="/*"
             element={
+              <RequireAuth>
               <Layout>
                 <Routes>
                   <Route path="/" element={<Navigate to="/dashboard" replace />} />
@@ -40,6 +49,7 @@ export const App: React.FC = () => {
                   <Route path="*" element={<Navigate to="/dashboard" replace />} />
                 </Routes>
               </Layout>
+              </RequireAuth>
             }
           />
         </Routes>

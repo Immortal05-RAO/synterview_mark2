@@ -8,7 +8,7 @@ interface HeaderProps {
 
 export const Header: React.FC<HeaderProps> = ({ title = 'Dashboard' }) => {
   const { user } = useAuth();
-  const userName = user?.name || 'Shashwat J.';
+  const userName = user?.name || 'User';
   const userInitial = userName.charAt(0).toUpperCase();
 
   return (

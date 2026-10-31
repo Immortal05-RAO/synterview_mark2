@@ -4,7 +4,7 @@ import { useAuth } from '../context/AuthContext';
 
 export const ProfilePage: React.FC = () => {
   const { user } = useAuth();
-  const userName = user?.name || 'Shashwat J.';
+  const userName = user?.name || 'User';
   const userEmail = user?.email || 'shashwat@synterview.ai';
 
   return (

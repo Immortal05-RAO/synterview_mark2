@@ -27,7 +27,7 @@ export const Sidebar: React.FC = () => {
     { label: 'Settings', path: '/settings', icon: Settings },
   ];
 
-  const userName = user?.name || 'Shashwat J.';
+  const userName = user?.name || 'User';
   const userInitial = userName.charAt(0).toUpperCase();
 
   return (

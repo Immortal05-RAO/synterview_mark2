@@ -29,42 +29,28 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         } catch {
           localStorage.removeItem('synterview_access_token');
           localStorage.removeItem('synterview_refresh_token');
-          setUser({ id: 'demo-user-1', name: 'Shashwat J.', email: 'shashwat@synterview.ai' });
         }
-      } else {
-        setUser({ id: 'demo-user-1', name: 'Shashwat J.', email: 'shashwat@synterview.ai' });
       }
       setIsLoading(false);
     };
     initAuth();
   }, []);
 
+  const storeSession = async (access: string, refresh: string) => {
+    localStorage.setItem('synterview_access_token', access);
+    localStorage.setItem('synterview_refresh_token', refresh);
+    const meRes = await authApi.getMe();
+    setUser(meRes.user);
+  };
+
   const login = async (email: string, password: string) => {
-    try {
-      const res = await authApi.login(email, password);
-      localStorage.setItem('synterview_access_token', res.accessToken);
-      localStorage.setItem('synterview_refresh_token', res.refreshToken);
-      const meRes = await authApi.getMe();
-      setUser(meRes.user);
-    } catch {
-      localStorage.setItem('synterview_access_token', 'demo-access-token');
-      localStorage.setItem('synterview_refresh_token', 'demo-refresh-token');
-      setUser({ id: 'demo-user-1', name: 'Shashwat J.', email });
-    }
+    const res = await authApi.login(email, password);
+    await storeSession(res.accessToken, res.refreshToken);
   };
 
   const register = async (name: string, email: string, password: string) => {
-    try {
-      const res = await authApi.register(name, email, password);
-      localStorage.setItem('synterview_access_token', res.accessToken);
-      localStorage.setItem('synterview_refresh_token', res.refreshToken);
-      const meRes = await authApi.getMe();
-      setUser(meRes.user);
-    } catch {
-      localStorage.setItem('synterview_access_token', 'demo-access-token');
-      localStorage.setItem('synterview_refresh_token', 'demo-refresh-token');
-      setUser({ id: 'demo-user-1', name, email });
-    }
+    const res = await authApi.register(name, email, password);
+    await storeSession(res.accessToken, res.refreshToken);
   };
 
   const logout = async () => {

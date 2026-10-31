@@ -3,20 +3,31 @@ import { useNavigate, Link } from 'react-router-dom';
 import { Mic, User, Mail, Lock, ArrowRight } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
+const errorMessage = (err: unknown): string => {
+  const data = (err as { response?: { data?: { message?: string; detail?: unknown } } })?.response?.data;
+  if (data?.message) return data.message;
+  if (typeof data?.detail === 'string') return data.detail;
+  return 'Could not reach the server. Please try again.';
+};
+
 export const RegisterPage: React.FC = () => {
   const navigate = useNavigate();
   const { register } = useAuth();
-  const [name, setName] = useState('Shashwat J.');
-  const [email, setEmail] = useState('shashwat@synterview.ai');
-  const [password, setPassword] = useState('Password123!');
+  const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
+    setError('');
     try {
       await register(name, email, password);
       navigate('/dashboard');
+    } catch (err) {
+      setError(errorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -34,6 +45,11 @@ export const RegisterPage: React.FC = () => {
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4 text-xs">
+          {error && (
+            <div role="alert" className="rounded-xl bg-red-50 border border-red-200 text-red-600 font-semibold px-3 py-2">
+              {error}
+            </div>
+          )}
           <div>
             <label className="block font-bold text-slate-700 mb-1">Full Name</label>
             <div className="relative">
