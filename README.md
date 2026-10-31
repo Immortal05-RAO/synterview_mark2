@@ -4,7 +4,7 @@ Synterview is an AI-powered mock interview platform that conducts automated tech
 
 This repository contains the **100% Cloud-Ready REST API Backend** built with **FastAPI**, **SQLAlchemy**, **Pydantic**, and **JWT Authentication**.
 
-> **Cloud Architecture Note:** The backend has zero dependencies on local GPUs, PyTorch model downloads, CUDA, or local Whisper installations. It runs on standard CPU containers (e.g. Railway, Render, Docker) and connects to cloud APIs for Speech-to-Text and AI evaluation.
+> **Cloud Architecture Note:** The backend has zero dependencies on local GPUs, PyTorch model downloads, CUDA, or local Whisper installations. It runs on standard CPU containers (e.g. Render, Docker) and connects to cloud APIs for Speech-to-Text and AI evaluation.
 
 ---
 
@@ -89,7 +89,7 @@ pytest -v tests/
 
 ---
 
-## ☁️ Cloud Deployment Guide (Railway / Render / Docker)
+## ☁️ Cloud Deployment Guide (Render / Docker)
 
 ### Option 1: Deploy with Docker
 ```bash
@@ -100,17 +100,21 @@ docker build -t synterview-backend .
 docker run -p 5000:5000 -e PORT=5000 --env-file .env synterview-backend
 ```
 
-### Option 2: Deploy to Railway / Render
-1. Connect your GitHub repository to Railway or Render.
+### Option 2: Deploy to Render
+1. Create a **Web Service** on Render from your GitHub repository (Runtime: Docker, or Python with the start command below).
 2. Set Environment Variables in the platform dashboard:
    - `ENVIRONMENT=production`
-   - `PORT=5000` (or leave default for platform auto-assignment)
+   - `PORT` is injected by Render automatically; do not hard-code it
    - `DATABASE_URL` = PostgreSQL connection URL (e.g., `postgresql://user:pass@host:5432/dbname`)
    - `JWT_SECRET` = your secret
    - `JWT_REFRESH_SECRET` = your secret
    - `AI_PROVIDER` = `openai` or `gemini` or `fallback`
    - `AI_API_KEY` = your API key
-3. Start Command:
+   - `CORS_ORIGIN` = your frontend URL (e.g. `https://your-app.vercel.app`)
+3. Render notes:
+   - The free web service's disk is ephemeral and the service sleeps when idle, so use a Render PostgreSQL database for `DATABASE_URL` (SQLite data is lost on every deploy/restart). Free Render Postgres databases expire after a limited period; check Render's current free-tier terms.
+   - Set `VITE_API_URL` on the frontend (Vercel) to your Render URL.
+4. Start Command:
    ```bash
    python main.py
    ```
