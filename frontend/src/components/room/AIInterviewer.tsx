@@ -1,5 +1,7 @@
 import React from 'react';
 import { Volume2 } from 'lucide-react';
+import { VoiceSelector } from './VoiceSelector';
+import type { VoiceGender } from '../../hooks/useTextToSpeech';
 
 interface AIInterviewerProps {
   questionText: string;
@@ -15,6 +17,9 @@ interface AIInterviewerProps {
   isSpeechRecognitionSupported?: boolean;
   feedbackFeed?: string[];
   backendFeedback?: string | null;
+  voiceGender: VoiceGender;
+  onVoiceGenderChange: (gender: VoiceGender) => void;
+  voiceName?: string | null;
 }
 
 const STATUS_DOT: Record<AIInterviewerProps['status'], string> = {
@@ -38,6 +43,9 @@ export const AIInterviewer: React.FC<AIInterviewerProps> = ({
   isSpeechRecognitionSupported = true,
   feedbackFeed = [],
   backendFeedback = null,
+  voiceGender,
+  onVoiceGenderChange,
+  voiceName,
 }) => {
   const shownStatus = isSpeaking ? 'Speaking' : status;
 
@@ -71,6 +79,14 @@ export const AIInterviewer: React.FC<AIInterviewerProps> = ({
       </div>
 
       <div className="px-5 py-5 border-b border-slate-200 flex-shrink-0">
+        <div className="flex items-start justify-between gap-3 mb-4 pb-4 border-b border-slate-100">
+          <div>
+            <span className="text-xs font-semibold uppercase tracking-wide text-slate-500 block mb-1.5">
+              Interviewer voice
+            </span>
+            <VoiceSelector value={voiceGender} onChange={onVoiceGenderChange} voiceName={voiceName} />
+          </div>
+        </div>
         <div className="flex items-center justify-between text-xs text-slate-500 mb-2">
           <span className="font-semibold uppercase tracking-wide text-[#FF6B00]">{category}</span>
           <span>

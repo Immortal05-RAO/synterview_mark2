@@ -6,6 +6,7 @@ import { AIInterviewer } from '../components/room/AIInterviewer';
 import { LiveScoring } from '../components/room/LiveScoring';
 import { TextAnswerModal } from '../components/room/TextAnswerModal';
 import { AnswerHintModal } from '../components/room/AnswerHintModal';
+import { VoiceSelector } from '../components/room/VoiceSelector';
 import { useAudioRecorder } from '../hooks/useAudioRecorder';
 import { useSpeechRecognition } from '../hooks/useSpeechRecognition';
 import { useTextToSpeech } from '../hooks/useTextToSpeech';
@@ -64,7 +65,8 @@ export const InterviewRoomPage: React.FC = () => {
     setPhaseState(next);
   }, []);
 
-  const { speak, cancel: cancelTts, isSpeaking, error: ttsError } = useTextToSpeech();
+  const { speak, cancel: cancelTts, isSpeaking, error: ttsError, voiceGender, setVoiceGender, voiceName } =
+    useTextToSpeech();
 
   const {
     micState,
@@ -270,6 +272,22 @@ export const InterviewRoomPage: React.FC = () => {
     return () => window.clearInterval(tick);
   }, [phase, finishAnswer]);
 
+  // Changing the voice previews it before the interview, or re-reads the current question mid-way
+  const firstVoiceRender = useRef(true);
+  useEffect(() => {
+    if (firstVoiceRender.current) {
+      firstVoiceRender.current = false;
+      return;
+    }
+    if (phaseRef.current === 'idle') {
+      speak("Hi, I'll be your interviewer today. Let's start whenever you're ready.", () => {});
+    } else if (phaseRef.current === 'speaking' && questionRef.current) {
+      askQuestion(questionRef.current);
+    }
+    // Only react to a voice change, not to callback identity changes
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [voiceGender]);
+
   const handleStartInterview = () => {
     if (!currentQuestion) return;
     setFeedbackFeed((prev) => [...prev, 'Voice conversation started']);
@@ -422,6 +440,9 @@ export const InterviewRoomPage: React.FC = () => {
             isSpeechRecognitionSupported={isSpeechRecognitionSupported}
             feedbackFeed={feedbackFeed}
             backendFeedback={latestEvaluation?.feedback}
+            voiceGender={voiceGender}
+            onVoiceGenderChange={setVoiceGender}
+            voiceName={voiceName}
           />
         </div>
 
@@ -460,10 +481,16 @@ export const InterviewRoomPage: React.FC = () => {
                   The interviewer asks each question out loud. Answer naturally and pause when you are finished; the
                   next question follows automatically. Your browser will ask for microphone access.
                 </p>
+                <div className="mt-5">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-slate-500 block mb-1.5">
+                    Choose your interviewer's voice
+                  </span>
+                  <VoiceSelector value={voiceGender} onChange={setVoiceGender} voiceName={voiceName} />
+                </div>
                 <button
                   onClick={handleStartInterview}
                   disabled={!currentQuestion}
-                  className="mt-6 w-full bg-[#FF6B00] hover:bg-[#E56000] disabled:opacity-50 text-white font-semibold py-2.5 rounded-md text-sm"
+                  className="mt-5 w-full bg-[#FF6B00] hover:bg-[#E56000] disabled:opacity-50 text-white font-semibold py-2.5 rounded-md text-sm"
                 >
                   {currentQuestion ? 'Begin interview' : 'Loading...'}
                 </button>
