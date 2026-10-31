@@ -39,6 +39,13 @@ logger = logging.getLogger("synterview")
 
 ALLOWED_AUDIO_EXTENSIONS = {".webm", ".wav", ".mp3", ".m4a", ".mp4", ".ogg", ".oga", ".flac"}
 
+def _parse_duration(value) -> float:
+    try:
+        return max(0.0, min(float(value), 3600.0))
+    except (TypeError, ValueError):
+        return 0.0
+
+
 router = APIRouter(prefix="/api/interviews", tags=["Interviews"])
 
 
@@ -207,6 +214,7 @@ async def submit_answer(
     answer_text = None
     transcript_text = None
     duration_seconds = 0.0
+    client_duration = 0.0
     segments = []
 
     content_type = request.headers.get("content-type", "")
@@ -216,6 +224,7 @@ async def submit_answer(
         question_id = form.get("questionId")
         answer_text = form.get("answer")
         audio_file: Optional[UploadFile] = form.get("audio")
+        client_duration = _parse_duration(form.get("durationSeconds"))
 
         if audio_file:
             content = await audio_file.read()
@@ -259,10 +268,15 @@ async def submit_answer(
             body = await request.json()
             question_id = body.get("questionId")
             answer_text = body.get("answer")
+            client_duration = _parse_duration(body.get("durationSeconds"))
         except Exception:
             raise APIException(status.HTTP_400_BAD_REQUEST, "INVALID_REQUEST_BODY", "Invalid JSON request body")
 
-    if not answer_text and not transcript_text:
+    # Server-side STT may be unavailable; fall back to the duration measured by the client
+    if not duration_seconds and client_duration:
+        duration_seconds = client_duration
+
+    if not (answer_text or "").strip() and not (transcript_text or "").strip():
         raise APIException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             "NO_SPEECH_DETECTED",

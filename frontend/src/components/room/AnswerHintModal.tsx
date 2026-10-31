@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Lightbulb, X, ChevronRight, CheckCircle2, Sparkles, AlertCircle, Loader2 } from 'lucide-react';
+import { X, ChevronRight, AlertCircle, Loader2 } from 'lucide-react';
 import { interviewsApi } from '../../api/interviews';
 
 interface AnswerHintModalProps {
@@ -88,128 +88,90 @@ export const AnswerHintModal: React.FC<AnswerHintModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 backdrop-blur-sm p-4 animate-in fade-in duration-200">
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl shadow-2xl max-w-2xl w-full overflow-hidden flex flex-col max-h-[90vh]">
-        {/* Header */}
-        <div className="bg-slate-900 px-6 py-4 flex items-center justify-between border-b border-slate-800 text-white">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-2xl bg-amber-500/20 border border-amber-500/30 text-amber-400 flex items-center justify-center">
-              <Lightbulb className="w-5 h-5 fill-amber-400/20" />
-            </div>
-            <div>
-              <h3 className="font-extrabold text-base tracking-tight text-white flex items-center gap-2">
-                Answer Hints
-                <span className="text-[10px] font-bold bg-orange-500/20 text-orange-400 px-2 py-0.5 rounded-full border border-orange-500/30">
-                  Coaching Mode
-                </span>
-              </h3>
-              <p className="text-xs text-slate-400">Use these progressive hints to build your own response.</p>
-            </div>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
+      <div className="bg-white border border-slate-200 rounded-lg shadow-xl max-w-2xl w-full overflow-hidden flex flex-col max-h-[90vh]">
+        <div className="px-6 py-4 flex items-center justify-between border-b border-slate-200">
+          <div>
+            <h3 className="font-bold text-base text-slate-900">Answer hints</h3>
+            <p className="text-xs text-slate-500">Use these progressive hints to build your own response.</p>
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 rounded-xl hover:bg-slate-800 text-slate-400 hover:text-white transition-colors"
+            className="p-1.5 rounded-md hover:bg-slate-100 text-slate-500 hover:text-slate-800 transition-colors"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        {/* Modal Body */}
-        <div className="p-6 overflow-y-auto flex-1 space-y-5 text-slate-800 dark:text-slate-200">
-          {/* Question Summary Banner */}
-          <div className="bg-slate-100 dark:bg-slate-800/60 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-700/60 text-xs">
-            <span className="font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider block mb-1">
-              Current Question
+        <div className="p-6 overflow-y-auto flex-1 space-y-5 text-slate-800">
+          <div className="bg-slate-50 p-3.5 rounded-md border border-slate-200 text-sm">
+            <span className="text-xs font-semibold uppercase tracking-wide text-slate-500 block mb-1">
+              Current question
             </span>
-            <p className="font-semibold text-slate-900 dark:text-slate-100 italic">"{questionText}"</p>
+            <p className="font-semibold text-slate-900">{questionText}</p>
           </div>
 
-          {/* Error Banner */}
           {error && (
-            <div className="p-3 bg-rose-500/10 border border-rose-500/30 rounded-xl text-xs text-rose-600 dark:text-rose-400 flex items-center gap-2">
+            <div className="p-3 bg-red-50 border border-red-200 rounded-md text-xs text-red-700 flex items-center gap-2">
               <AlertCircle className="w-4 h-4 flex-shrink-0" />
               <span>{error}</span>
             </div>
           )}
 
-          {/* Progressive Hints List */}
           <div className="space-y-3">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
-                Progressive Guidance (Hint {currentHintLevel} of 5)
+              <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Hint {currentHintLevel} of 5
               </span>
               <div className="flex gap-1">
                 {[1, 2, 3, 4, 5].map((lvl) => (
                   <div
                     key={lvl}
-                    className={`w-5 h-1.5 rounded-full transition-all ${
-                      lvl <= currentHintLevel ? 'bg-[#FF6B00]' : 'bg-slate-200 dark:bg-slate-800'
-                    }`}
+                    className={`w-5 h-1.5 rounded-sm ${lvl <= currentHintLevel ? 'bg-[#FF6B00]' : 'bg-slate-200'}`}
                   />
                 ))}
               </div>
             </div>
 
             {hintsList.map((hintText, idx) => (
-              <div
-                key={idx}
-                className="p-4 rounded-2xl bg-amber-500/5 border border-amber-500/20 text-slate-800 dark:text-slate-200 text-sm font-medium flex items-start gap-3 animate-in fade-in duration-300"
-              >
-                <div className="w-6 h-6 rounded-full bg-amber-500/20 text-amber-500 flex items-center justify-center font-bold text-xs flex-shrink-0 mt-0.5">
-                  {idx + 1}
-                </div>
-                <div className="flex-1">
-                  <span className="text-[11px] font-bold text-amber-600 dark:text-amber-400 block mb-0.5">
-                    Hint {idx + 1}
-                  </span>
-                  <p className="leading-relaxed">{hintText}</p>
-                </div>
+              <div key={idx} className="border-l-2 border-[#FF6B00] pl-3 py-1">
+                <span className="text-xs font-semibold text-slate-500 block mb-0.5">Hint {idx + 1}</span>
+                <p className="text-sm leading-relaxed text-slate-800">{hintText}</p>
               </div>
             ))}
 
             {isLoadingHint && (
-              <div className="p-4 rounded-2xl border border-dashed border-slate-300 dark:border-slate-800 flex items-center justify-center gap-2 text-xs text-slate-500">
+              <div className="p-4 rounded-md border border-dashed border-slate-300 flex items-center justify-center gap-2 text-xs text-slate-500">
                 <Loader2 className="w-4 h-4 animate-spin text-[#FF6B00]" />
-                <span>Generating next progressive hint...</span>
+                <span>Generating the next hint...</span>
               </div>
             )}
           </div>
 
-          {/* Ideal Answer Section */}
           {idealAnswer && (
-            <div className="mt-6 p-5 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-slate-800 dark:text-slate-100 space-y-2 animate-in slide-in-from-bottom-2 duration-300">
-              <div className="flex items-center gap-2 text-emerald-600 dark:text-emerald-400 font-bold text-xs">
-                <Sparkles className="w-4 h-4" />
-                <span>EXEMPLARY IDEAL ANSWER</span>
-              </div>
-              <div className="text-sm leading-relaxed whitespace-pre-line font-normal text-slate-700 dark:text-slate-200">
-                {idealAnswer}
-              </div>
+            <div className="p-4 rounded-md bg-slate-50 border border-slate-200 space-y-2">
+              <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Model answer</span>
+              <div className="text-sm leading-relaxed whitespace-pre-line text-slate-700">{idealAnswer}</div>
             </div>
           )}
         </div>
 
-        {/* Modal Actions Footer */}
-        <div className="p-4 bg-slate-50 dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3">
+        <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between gap-3">
           <button
             onClick={handleShowIdealAnswer}
             disabled={isLoadingIdeal || !!idealAnswer}
-            className="px-4 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold text-xs flex items-center gap-2 transition-all disabled:opacity-50"
+            className="px-4 py-2 rounded-md border border-slate-300 hover:bg-white text-slate-700 font-semibold text-sm flex items-center gap-2 transition-colors disabled:opacity-50"
           >
-            {isLoadingIdeal ? (
-              <Loader2 className="w-4 h-4 animate-spin text-slate-400" />
-            ) : (
-              <CheckCircle2 className="w-4 h-4 text-emerald-500" />
-            )}
-            <span>{idealAnswer ? 'Ideal Answer Revealed' : 'Show Ideal Answer'}</span>
+            {isLoadingIdeal && <Loader2 className="w-4 h-4 animate-spin text-slate-400" />}
+            <span>{idealAnswer ? 'Model answer shown' : 'Show model answer'}</span>
           </button>
 
           <button
             onClick={handleRevealNextHint}
             disabled={currentHintLevel >= 5 || isLoadingHint}
-            className="px-5 py-2.5 rounded-xl bg-[#FF6B00] hover:bg-[#e05e00] text-white font-bold text-xs flex items-center gap-2 shadow-md shadow-orange-500/20 transition-all disabled:opacity-50"
+            className="px-4 py-2 rounded-md bg-[#FF6B00] hover:bg-[#E56000] text-white font-semibold text-sm flex items-center gap-1.5 transition-colors disabled:opacity-50"
           >
-            <span>{currentHintLevel >= 5 ? 'All Hints Revealed' : 'Reveal Next Hint'}</span>
+            <span>{currentHintLevel >= 5 ? 'All hints shown' : 'Next hint'}</span>
             <ChevronRight className="w-4 h-4" />
           </button>
         </div>

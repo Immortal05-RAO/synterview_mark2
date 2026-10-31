@@ -2,13 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { Mic, Lock, Mail, ArrowRight } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-
-const errorMessage = (err: unknown): string => {
-  const data = (err as { response?: { data?: { message?: string; detail?: unknown } } })?.response?.data;
-  if (data?.message) return data.message;
-  if (typeof data?.detail === 'string') return data.detail;
-  return 'Could not reach the server. Please try again.';
-};
+import { getApiError } from '../utils/apiError';
 
 export const LoginPage: React.FC = () => {
   const navigate = useNavigate();
@@ -26,7 +20,7 @@ export const LoginPage: React.FC = () => {
       await login(email, password);
       navigate('/dashboard');
     } catch (err) {
-      setError(errorMessage(err));
+      setError(getApiError(err).message);
     } finally {
       setLoading(false);
     }

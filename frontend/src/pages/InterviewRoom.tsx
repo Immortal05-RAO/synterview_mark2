@@ -1,6 +1,6 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Mic, Clock, X, Users, AlertCircle } from 'lucide-react';
+import { Mic, Clock, X, AlertCircle } from 'lucide-react';
 import { CandidatePanel } from '../components/room/CandidatePanel';
 import { AIInterviewer } from '../components/room/AIInterviewer';
 import { LiveScoring } from '../components/room/LiveScoring';
@@ -12,45 +12,62 @@ import { useTextToSpeech } from '../hooks/useTextToSpeech';
 import { useAuth } from '../context/AuthContext';
 import { interviewsApi } from '../api/interviews';
 import type { Question, Evaluation, SpeechMetrics } from '../api/interviews';
+import { getApiError } from '../utils/apiError';
+
+type Phase = 'idle' | 'speaking' | 'listening' | 'processing' | 'paused' | 'finished';
+
+// Hands-free turn taking: the answer ends once the candidate has spoken and then gone quiet.
+const SILENCE_MS = 2500;
+const MAX_ANSWER_MS = 150_000;
+const NO_SPEECH_TIMEOUT_MS = 20_000;
+const VOLUME_THRESHOLD = 10;
+const MAX_NO_SPEECH_RETRIES = 2;
+
+// Short spoken reaction to the answer so the conversation feels continuous
+const buildAcknowledgement = (evaluation: Evaluation): string => {
+  const score = evaluation.overallScore;
+  const opener = score >= 80 ? 'Great answer.' : score >= 60 ? 'Thanks, that was a solid answer.' : 'Okay, thank you.';
+  const tip = evaluation.improvements?.[0];
+  const trimmedTip = tip && tip.length <= 120 ? ` One thing to work on: ${tip.replace(/\.$/, '')}.` : '';
+  return `${opener}${trimmedTip} Next question.`;
+};
 
 export const InterviewRoomPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { user } = useAuth();
 
-  const [currentQuestion, setCurrentQuestion] = useState<Question>({
-    id: 'q1',
-    text: 'Explain how database indexing improves query performance.',
-    category: 'Databases',
-  });
+  const [currentQuestion, setCurrentQuestion] = useState<Question | null>(null);
   const [questionNumber, setQuestionNumber] = useState(1);
   const [totalQuestions, setTotalQuestions] = useState(5);
-  const [roleTitle] = useState('Software Engineer');
+  const [roleTitle, setRoleTitle] = useState('');
 
-  // Evaluation & Speech Data from Backend
   const [latestEvaluation, setLatestEvaluation] = useState<Evaluation | null>(null);
   const [latestSpeechMetrics, setLatestSpeechMetrics] = useState<SpeechMetrics | null>(null);
   const [latestTranscript, setLatestTranscript] = useState<string | null>(null);
+  const [feedbackFeed, setFeedbackFeed] = useState<string[]>(['Session initialized', 'Question generated']);
 
-  // AI Feedback feed milestones
-  const [feedbackFeed, setFeedbackFeed] = useState<string[]>([
-    'Session initialized',
-    'Question generated',
-  ]);
-
-  // Processing Step State
-  const [processingStep, setProcessingStep] = useState<string | null>(null);
-  const [aiStatus, setAiStatus] = useState<'Listening' | 'Thinking' | 'Speaking' | 'Ready'>('Ready');
+  const [phase, setPhaseState] = useState<Phase>('idle');
   const [isTextModalOpen, setIsTextModalOpen] = useState(false);
   const [isHintModalOpen, setIsHintModalOpen] = useState(false);
-  const [sessionTimer, setSessionTimer] = useState(24);
+  const [sessionTimer, setSessionTimer] = useState(0);
   const [pipelineError, setPipelineError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  const phaseRef = useRef<Phase>('idle');
+  const questionRef = useRef<Question | null>(null);
+  const noSpeechRetriesRef = useRef(0);
+  const turnRef = useRef({ start: 0, lastActivity: 0, lastText: '', speechMs: 0 });
+
+  const setPhase = useCallback((next: Phase) => {
+    phaseRef.current = next;
+    setPhaseState(next);
+  }, []);
 
   const { speak, cancel: cancelTts, isSpeaking, error: ttsError } = useTextToSpeech();
 
   const {
     micState,
-    setMicState,
     isRecording,
     duration,
     volumeLevel,
@@ -73,46 +90,224 @@ export const InterviewRoomPage: React.FC = () => {
 
   const combinedLiveTranscript = (liveFinalTranscript + ' ' + interimTranscript).trim();
 
-  // Timer counter
+  // Latest values for the silence monitor, which runs on an interval
+  const combinedRef = useRef('');
+  const volumeRef = useRef(0);
+  combinedRef.current = combinedLiveTranscript;
+  volumeRef.current = volumeLevel;
+
   useEffect(() => {
-    const timer = setInterval(() => {
-      setSessionTimer((prev) => prev + 1);
-    }, 1000);
+    const timer = setInterval(() => setSessionTimer((prev) => prev + 1), 1000);
     return () => clearInterval(timer);
   }, []);
 
-  // Automatically speak question when a new question is loaded
+  // Load the active question (also lets a reloaded page resume mid-interview)
   useEffect(() => {
-    if (currentQuestion && currentQuestion.text) {
-      setAiStatus('Speaking');
-      speak(currentQuestion.text, () => {
-        setAiStatus('Ready');
-      });
-    }
-    return () => {
-      cancelTts();
-    };
-  }, [currentQuestion.id, currentQuestion.text, speak, cancelTts]);
+    if (!id) return;
 
-  // Fetch current active question from backend
-  useEffect(() => {
-    if (!id || id === 'demo-session-id') return;
-
-    const fetchQuestion = async () => {
+    const load = async () => {
       try {
-        const res = await interviewsApi.getCurrentQuestion(id);
-        if (res.success) {
-          setCurrentQuestion(res.question);
-          setQuestionNumber(res.questionNumber);
-          setTotalQuestions(res.totalQuestions);
+        const [questionRes, detailRes] = await Promise.all([
+          interviewsApi.getCurrentQuestion(id),
+          interviewsApi.getDetail(id).catch(() => null),
+        ]);
+        if (questionRes.success) {
+          questionRef.current = questionRes.question;
+          setCurrentQuestion(questionRes.question);
+          setQuestionNumber(questionRes.questionNumber);
+          setTotalQuestions(questionRes.totalQuestions);
         }
+        if (detailRes?.success) setRoleTitle(detailRes.interview.role);
       } catch (err) {
-        console.warn('Backend question fetch fallback:', err);
+        const { code, message } = getApiError(err);
+        if (code === 'INTERVIEW_ALREADY_COMPLETED') {
+          navigate(`/interview/${id}/report`, { replace: true });
+          return;
+        }
+        setLoadError(message);
       }
     };
 
-    fetchQuestion();
-  }, [id]);
+    load();
+  }, [id, navigate]);
+
+  const beginListening = useCallback(async () => {
+    resetTranscript();
+    setPipelineError(null);
+    const now = Date.now();
+    turnRef.current = { start: now, lastActivity: now, lastText: '', speechMs: 0 };
+
+    const granted = await startRecording();
+    if (!granted) {
+      setPhase('paused');
+      return;
+    }
+    startListening();
+    setPhase('listening');
+  }, [resetTranscript, startRecording, startListening, setPhase]);
+
+  // Speak (optionally with an intro), then automatically start listening for the answer
+  const askQuestion = useCallback(
+    (question: Question, intro = '') => {
+      questionRef.current = question;
+      setCurrentQuestion(question);
+      setPhase('speaking');
+      speak(`${intro} ${question.text}`.trim(), () => {
+        if (phaseRef.current === 'speaking') beginListening();
+      });
+    },
+    [speak, beginListening, setPhase]
+  );
+
+  const handleNoSpeech = useCallback(() => {
+    noSpeechRetriesRef.current += 1;
+    if (noSpeechRetriesRef.current > MAX_NO_SPEECH_RETRIES) {
+      setPipelineError("I still couldn't hear you. Check your microphone, or type your answer instead.");
+      setPhase('paused');
+      return;
+    }
+    setPhase('speaking');
+    speak("Sorry, I didn't catch that. Please go ahead and answer again.", () => {
+      if (phaseRef.current === 'speaking') beginListening();
+    });
+  }, [speak, beginListening, setPhase]);
+
+  const submitTurn = useCallback(
+    async (payload: { answer?: string; audio?: Blob | null; seconds: number }) => {
+      const question = questionRef.current;
+      if (!id || !question) return;
+
+      setPhase('processing');
+      try {
+        const res = await interviewsApi.submitAnswer(id, {
+          questionId: question.id,
+          answer: payload.answer || undefined,
+          audioFile: payload.audio || undefined,
+          durationSeconds: payload.seconds,
+        });
+
+        noSpeechRetriesRef.current = 0;
+        setLatestEvaluation(res.evaluation);
+        if (res.speechMetrics) setLatestSpeechMetrics(res.speechMetrics);
+        setLatestTranscript(res.transcript || payload.answer || null);
+        setFeedbackFeed((prev) => [
+          ...prev,
+          `✓ Answer ${questionNumber} evaluated (Score: ${res.evaluation.overallScore}/100)`,
+        ]);
+        resetRecording();
+        resetTranscript();
+
+        if (res.completed) {
+          setPhase('finished');
+          speak('That was the last question. Thank you, I am preparing your report now.', () => {
+            navigate(`/interview/${id}/complete`);
+          });
+        } else if (res.nextQuestion) {
+          setQuestionNumber((prev) => prev + 1);
+          askQuestion(res.nextQuestion, buildAcknowledgement(res.evaluation));
+        }
+      } catch (err) {
+        const { code, message } = getApiError(err);
+        resetRecording();
+        if (code === 'NO_SPEECH_DETECTED') {
+          handleNoSpeech();
+        } else {
+          setPipelineError(message);
+          setPhase('paused');
+        }
+      }
+    },
+    [id, questionNumber, resetRecording, resetTranscript, speak, navigate, askQuestion, handleNoSpeech, setPhase]
+  );
+
+  // Called when the silence monitor decides the candidate has finished answering
+  const finishAnswer = useCallback(async () => {
+    if (phaseRef.current !== 'listening') return;
+    setPhase('processing');
+
+    const spoken = combinedRef.current.trim();
+    const seconds = Math.max(1, Math.round((Date.now() - turnRef.current.start) / 1000));
+    stopListening();
+    const blob = await stopRecording();
+
+    if (!blob && !spoken) {
+      handleNoSpeech();
+      return;
+    }
+    await submitTurn({ answer: spoken, audio: blob, seconds });
+  }, [stopListening, stopRecording, submitTurn, handleNoSpeech, setPhase]);
+
+  // Silence monitor: end the answer once the candidate has spoken and then gone quiet
+  useEffect(() => {
+    if (phase !== 'listening') return;
+
+    const tick = window.setInterval(() => {
+      const turn = turnRef.current;
+      const now = Date.now();
+      const text = combinedRef.current;
+
+      if (text !== turn.lastText) {
+        turn.lastText = text;
+        turn.lastActivity = now;
+      }
+      if (volumeRef.current > VOLUME_THRESHOLD) {
+        turn.speechMs += 200;
+        turn.lastActivity = now;
+      }
+
+      // Volume alone counts as speech too, in case live transcription is unavailable
+      const heardSpeech = text.length > 0 || turn.speechMs >= 1500;
+
+      if (heardSpeech && now - turn.lastActivity >= SILENCE_MS) {
+        finishAnswer();
+      } else if (now - turn.start >= MAX_ANSWER_MS) {
+        finishAnswer();
+      } else if (!heardSpeech && now - turn.start >= NO_SPEECH_TIMEOUT_MS) {
+        finishAnswer();
+      }
+    }, 200);
+
+    return () => window.clearInterval(tick);
+  }, [phase, finishAnswer]);
+
+  const handleStartInterview = () => {
+    if (!currentQuestion) return;
+    setFeedbackFeed((prev) => [...prev, 'Voice conversation started']);
+    askQuestion(currentQuestion, 'Welcome to your mock interview. Let us begin.');
+  };
+
+  const stopEverything = useCallback(() => {
+    cancelTts();
+    stopListening();
+    resetRecording();
+  }, [cancelTts, stopListening, resetRecording]);
+
+  const handleTogglePause = () => {
+    if (phase === 'paused') {
+      setPipelineError(null);
+      if (currentQuestion) askQuestion(currentQuestion, 'Let us continue.');
+    } else if (phase === 'speaking' || phase === 'listening') {
+      stopEverything();
+      setPhase('paused');
+    }
+  };
+
+  const handleReplayQuestion = () => {
+    if (!currentQuestion || phase === 'processing' || phase === 'finished') return;
+    stopEverything();
+    askQuestion(currentQuestion);
+  };
+
+  const handleTextAnswerSubmit = async (text: string) => {
+    if (phase === 'processing' || phase === 'finished') return;
+    stopEverything();
+    await submitTurn({ answer: text, seconds: Math.max(1, Math.round(text.split(/\s+/).length / 2.5)) });
+  };
+
+  const leave = () => {
+    stopEverything();
+    navigate('/dashboard');
+  };
 
   const formatTimer = (secs: number) => {
     const m = Math.floor(secs / 60);
@@ -120,284 +315,80 @@ export const InterviewRoomPage: React.FC = () => {
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
   };
 
-  const handleStartAnswering = async () => {
-    cancelTts();
-    setPipelineError(null);
-    setLatestEvaluation(null);
-    setLatestSpeechMetrics(null);
-    setLatestTranscript(null);
-    resetTranscript();
-    setAiStatus('Listening');
+  const sessionStateText =
+    phase === 'speaking'
+      ? 'Interviewer speaking'
+      : phase === 'listening'
+      ? 'Listening to you'
+      : phase === 'processing'
+      ? 'Evaluating answer'
+      : phase === 'paused'
+      ? 'Paused'
+      : phase === 'finished'
+      ? 'Finished'
+      : 'Ready to start';
 
-    const granted = await startRecording();
-    if (granted) {
-      startListening();
-      setFeedbackFeed((prev) => [
-        ...prev.filter((f) => !f.includes('Listening')),
-        'Candidate started recording',
-      ]);
-    } else {
-      setAiStatus('Ready');
-    }
-  };
-
-  const handleReplayQuestion = useCallback(() => {
-    cancelTts();
-    setAiStatus('Speaking');
-    speak(currentQuestion.text, () => {
-      setAiStatus('Ready');
-    });
-  }, [cancelTts, speak, currentQuestion.text]);
-
-  const handleStopRecording = async () => {
-    stopListening();
-    setAiStatus('Thinking');
-    setMicState('STOPPING');
-
-    const blob = await stopRecording();
-
-    if (!blob || blob.size === 0) {
-      setPipelineError('Could not detect speech in the recording.');
-      setAiStatus('Ready');
-      setMicState('IDLE');
-      return;
-    }
-
-    // Step 1: Uploading
-    setMicState('UPLOADING');
-    setProcessingStep('Uploading response...');
-
-    console.log('[PIPELINE DEBUG] Uploading recorded audio:', {
-      sizeBytes: blob.size,
-      mimeType: blob.type,
-      durationSeconds: duration,
-      questionId: currentQuestion.id,
-    });
-
-    if (id && id !== 'demo-session-id') {
-      try {
-        // Step 2: Transcribing
-        setMicState('TRANSCRIBING');
-        setProcessingStep('Transcribing response...');
-        setFeedbackFeed((prev) => [...prev, 'Uploaded audio to STT server']);
-
-        const res = await interviewsApi.submitAnswer(id, {
-          questionId: currentQuestion.id,
-          audioFile: blob,
-        });
-
-        // Step 3: Analyzing & Evaluating
-        setMicState('EVALUATING');
-        setProcessingStep('Analyzing response...');
-
-        if (res.success && res.evaluation) {
-          setLatestEvaluation(res.evaluation);
-          if (res.speechMetrics) setLatestSpeechMetrics(res.speechMetrics);
-          if (res.transcript) setLatestTranscript(res.transcript);
-
-          setFeedbackFeed((prev) => [
-            ...prev,
-            '✓ Response transcribed by STT',
-            '✓ Speech metrics calculated',
-            `✓ Answer evaluated (Score: ${res.evaluation.overallScore}/100)`,
-          ]);
-
-          setMicState('COMPLETED');
-          setProcessingStep('Evaluation complete');
-
-          if (res.completed) {
-            setTimeout(() => navigate(`/interview/${id}/complete`), 2500);
-          } else if (res.nextQuestion) {
-            setTimeout(() => {
-              setCurrentQuestion(res.nextQuestion!);
-              setQuestionNumber((prev) => prev + 1);
-              setProcessingStep(null);
-              resetRecording();
-              resetTranscript();
-            }, 4000);
-          }
-        }
-      } catch (err: any) {
-        console.error('[PIPELINE ERROR] Audio submission failed:', err);
-        const errMsg = err?.response?.data?.message || err?.message || 'Could not detect speech in the recording.';
-        setPipelineError(errMsg);
-        setProcessingStep(null);
-        setAiStatus('Ready');
-        setMicState('ERROR');
-      }
-    } else {
-      // Demo session flow with local whisper / fallback processing
-      handleFallbackEvaluation(combinedLiveTranscript || 'Database indexing improves query performance by allowing efficient lookups.');
-    }
-  };
-
-  const handleTextAnswerSubmit = async (text: string) => {
-    cancelTts();
-    setAiStatus('Thinking');
-    setMicState('UPLOADING');
-    setProcessingStep('Uploading response...');
-
-    if (id && id !== 'demo-session-id') {
-      try {
-        setMicState('TRANSCRIBING');
-        setProcessingStep('Transcribing response...');
-
-        const res = await interviewsApi.submitAnswer(id, {
-          questionId: currentQuestion.id,
-          answer: text,
-        });
-
-        setMicState('EVALUATING');
-        setProcessingStep('Analyzing response...');
-
-        if (res.success && res.evaluation) {
-          setLatestEvaluation(res.evaluation);
-          if (res.speechMetrics) setLatestSpeechMetrics(res.speechMetrics);
-          setLatestTranscript(res.transcript || text);
-
-          setFeedbackFeed((prev) => [
-            ...prev,
-            '✓ Text response submitted',
-            `✓ Answer evaluated (Score: ${res.evaluation.overallScore}/100)`,
-          ]);
-
-          setMicState('COMPLETED');
-          setProcessingStep('Evaluation complete');
-
-          if (res.completed) {
-            setTimeout(() => navigate(`/interview/${id}/complete`), 2500);
-          } else if (res.nextQuestion) {
-            setTimeout(() => {
-              setCurrentQuestion(res.nextQuestion!);
-              setQuestionNumber((prev) => prev + 1);
-              setProcessingStep(null);
-              resetRecording();
-              resetTranscript();
-            }, 4000);
-          }
-        }
-      } catch (e: any) {
-        console.error('[PIPELINE ERROR] Text submission failed:', e);
-        const errMsg = e?.response?.data?.message || 'Evaluation failed for text answer.';
-        setPipelineError(errMsg);
-        setProcessingStep(null);
-        setAiStatus('Ready');
-        setMicState('ERROR');
-      }
-    } else {
-      handleFallbackEvaluation(text);
-    }
-  };
-
-  const handleFallbackEvaluation = (ansText: string) => {
-    setLatestTranscript(ansText);
-    setAiStatus('Ready');
-    setMicState('COMPLETED');
-
-    setFeedbackFeed((prev) => [
-      ...prev,
-      '✓ Audio recorded',
-      '✓ Answer evaluated',
-    ]);
-
-    if (questionNumber >= totalQuestions) {
-      setTimeout(() => navigate(`/interview/${id || 'demo-session-id'}/complete`), 2500);
-    } else {
-      setTimeout(() => {
-        setQuestionNumber((prev) => prev + 1);
-        setCurrentQuestion({
-          id: `q${questionNumber + 1}`,
-          text: 'Explain how database indexing improves query performance.',
-          category: 'Databases',
-        });
-        setProcessingStep(null);
-        resetRecording();
-        resetTranscript();
-      }, 4000);
-    }
-  };
-
-  const getSessionStateText = () => {
-    if (processingStep) return processingStep;
-    if (isSpeaking) return 'AI Speaking...';
-    if (isRecording) return 'Recording...';
-    if (micState === 'MIC_READY') return 'Microphone Ready';
-    if (micState === 'COMPLETED') return 'Evaluated';
-    return 'Waiting';
-  };
+  const aiStatus = phase === 'speaking' ? 'Speaking' : phase === 'listening' ? 'Listening' : phase === 'processing' ? 'Thinking' : 'Ready';
+  const bannerMessage = pipelineError || ttsError;
 
   return (
-    <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col justify-between p-4 font-sans select-none">
-      {/* Top Navbar matching Image 3 */}
-      <header className="bg-slate-800/90 backdrop-blur-md rounded-2xl px-6 py-3 border border-slate-700/80 flex items-center justify-between mb-4 shadow-lg">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-xl bg-[#FF6B00] text-white flex items-center justify-center shadow-md shadow-orange-500/20">
+    <div className="h-screen overflow-hidden bg-[#F8FAFC] text-slate-800 flex flex-col font-sans select-none relative">
+      <header className="flex-shrink-0 bg-white border-b border-slate-200 px-6 h-14 flex items-center justify-between">
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="w-7 h-7 rounded-md bg-[#FF6B00] text-white flex items-center justify-center flex-shrink-0">
             <Mic className="w-4 h-4 stroke-[2.5]" />
           </div>
-          <span className="font-extrabold text-sm tracking-tight text-white">SYNTERVIEW</span>
-          <span className="text-[10px] font-bold text-orange-400 bg-orange-500/10 px-1.5 py-0.5 rounded">AI</span>
-          <span className="text-slate-600">|</span>
-          <span className="text-xs font-semibold text-slate-300">
-            Mock Interview Session: {roleTitle}
-          </span>
+          <span className="font-extrabold text-sm tracking-tight text-slate-900">SYNTERVIEW</span>
+          <span className="text-slate-300">/</span>
+          <span className="text-sm text-slate-600 truncate">{roleTitle ? `${roleTitle} interview` : 'Mock interview'}</span>
         </div>
 
-        <div className="flex items-center gap-3 text-xs">
-          <div className="bg-slate-700/60 px-3 py-1.5 rounded-xl border border-slate-600/60 flex items-center gap-1.5 font-mono text-slate-200">
-            <Clock className="w-3.5 h-3.5 text-orange-400" />
-            <span>{formatTimer(sessionTimer)}</span>
-          </div>
-
-          <div className="bg-slate-700/60 px-3 py-1.5 rounded-xl border border-slate-600/60 font-semibold text-slate-300">
-            Q {questionNumber} / {totalQuestions}
-          </div>
-
-          <div className="bg-slate-700/60 px-3 py-1.5 rounded-xl border border-slate-600/60 flex items-center gap-1.5 text-slate-300">
-            <Users className="w-3.5 h-3.5 text-blue-400" />
-            <span>Ideal Interviewer</span>
-          </div>
-
+        <div className="flex items-center gap-5 text-sm flex-shrink-0">
+          <span className="flex items-center gap-1.5 font-mono text-slate-600 w-[64px]">
+            <Clock className="w-3.5 h-3.5 text-slate-400" />
+            {formatTimer(sessionTimer)}
+          </span>
+          <span className="font-medium text-slate-600">
+            Question {questionNumber} of {totalQuestions}
+          </span>
           <button
-            onClick={() => {
-              cancelTts();
-              navigate('/dashboard');
-            }}
-            className="bg-rose-500 hover:bg-rose-600 text-white font-bold px-3.5 py-1.5 rounded-xl text-xs flex items-center gap-1 transition-all shadow-md"
+            onClick={leave}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-slate-300 text-slate-700 text-sm font-semibold hover:bg-slate-50 transition-colors"
           >
             <X className="w-4 h-4" />
-            <span>End Interview</span>
+            End interview
           </button>
         </div>
       </header>
 
-      {/* Pipeline Error / TTS Warning Banner */}
-      {(pipelineError || ttsError) && (
-        <div className="mb-4 p-3 bg-amber-500/20 border border-amber-500/40 rounded-xl text-xs text-amber-200 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <AlertCircle className="w-4 h-4 text-amber-400 flex-shrink-0" />
-            <span>{pipelineError || ttsError}</span>
+      {/* Floating notice: overlays the page so showing/hiding it never shifts the layout */}
+      {bannerMessage && (
+        <div className="absolute left-1/2 -translate-x-1/2 top-16 z-30 w-[min(720px,calc(100%-2rem))] px-4 py-3 bg-white border border-slate-200 border-l-4 border-l-[#FF6B00] rounded-md text-sm text-slate-700 flex items-center justify-between gap-3 shadow-md">
+          <div className="flex items-center gap-2 min-w-0">
+            <AlertCircle className="w-4 h-4 text-[#FF6B00] flex-shrink-0" />
+            <span>{bannerMessage}</span>
           </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={handleStartAnswering}
-              className="px-3 py-1 bg-[#FF6B00] hover:bg-[#e05e00] text-white font-bold rounded-lg text-xs"
-            >
-              Try Again
-            </button>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            {phase === 'paused' && (
+              <button
+                onClick={handleTogglePause}
+                className="px-3 py-1.5 bg-[#FF6B00] hover:bg-[#E56000] text-white font-semibold rounded-md text-xs"
+              >
+                Try again
+              </button>
+            )}
             <button
               onClick={() => setIsTextModalOpen(true)}
-              className="px-3 py-1 bg-slate-800 hover:bg-slate-700 text-orange-400 font-bold rounded-lg text-xs"
+              className="px-3 py-1.5 border border-slate-300 hover:bg-slate-50 text-slate-700 font-semibold rounded-md text-xs"
             >
-              Answer with Text
+              Type answer
             </button>
           </div>
         </div>
       )}
 
-      {/* 3 Column Major Layout matching Image 3 */}
-      <div className="flex-1 grid grid-cols-1 lg:grid-cols-10 gap-4 min-h-[580px]">
-        {/* Left Column: Candidate Panel (30%) */}
-        <div className="lg:col-span-3">
+      <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-10 gap-5 p-5 overflow-y-auto lg:overflow-hidden">
+        <div className="lg:col-span-3 lg:min-h-0 lg:h-full">
           <CandidatePanel
             candidateName={user?.name || 'Candidate'}
             micState={micState}
@@ -406,30 +397,26 @@ export const InterviewRoomPage: React.FC = () => {
             volumeLevel={volumeLevel}
             audioDataArray={audioDataArray}
             mimeTypeUsed={mimeTypeUsed}
-            onStartAnswering={handleStartAnswering}
-            onStopRecording={handleStopRecording}
+            isPaused={phase === 'paused'}
+            onTogglePause={handleTogglePause}
             onOpenTextModal={() => setIsTextModalOpen(true)}
-            onLeaveSession={() => {
-              cancelTts();
-              navigate('/dashboard');
-            }}
-            sessionStateText={getSessionStateText()}
+            onLeaveSession={leave}
+            sessionStateText={sessionStateText}
             errorMessage={micError}
             isSpeaking={isSpeaking}
           />
         </div>
 
-        {/* Center Column: AI Interviewer (40%) */}
-        <div className="lg:col-span-4">
+        <div className="lg:col-span-4 lg:min-h-0 lg:h-full">
           <AIInterviewer
-            questionText={currentQuestion.text}
-            category={currentQuestion.category}
+            questionText={currentQuestion?.text ?? (loadError ? '' : 'Loading your first question...')}
+            category={currentQuestion?.category}
             questionNumber={questionNumber}
             totalQuestions={totalQuestions}
             status={aiStatus}
             onReplayQuestion={handleReplayQuestion}
             isSpeaking={isSpeaking}
-            isRecording={isRecording}
+            isRecording={phase === 'listening'}
             liveTranscript={combinedLiveTranscript}
             finalTranscript={latestTranscript}
             isSpeechRecognitionSupported={isSpeechRecognitionSupported}
@@ -438,8 +425,7 @@ export const InterviewRoomPage: React.FC = () => {
           />
         </div>
 
-        {/* Right Column: Live Scoring (30%) */}
-        <div className="lg:col-span-3">
+        <div className="lg:col-span-3 lg:min-h-0 lg:h-full">
           <LiveScoring
             evaluation={latestEvaluation}
             speechMetrics={latestSpeechMetrics}
@@ -447,35 +433,59 @@ export const InterviewRoomPage: React.FC = () => {
             questionNumber={questionNumber}
             totalQuestions={totalQuestions}
             onRevealIdealAnswer={() => setIsHintModalOpen(true)}
-            onSubmitResponse={() => {
-              if (isRecording) {
-                handleStopRecording();
-              } else {
-                setIsTextModalOpen(true);
-              }
-            }}
-            isSubmitting={!!processingStep}
-            canSubmit={!isSpeaking && (isRecording || getSessionStateText() === 'Waiting' || getSessionStateText() === 'Microphone Ready')}
-            processingStep={processingStep}
+            processingStep={phase === 'processing' ? 'Evaluating your answer...' : null}
           />
         </div>
       </div>
 
-      {/* Text Modal Fallback */}
+      {/* Start gate: browsers only allow audio playback and mic access after a user gesture */}
+      {phase === 'idle' && (
+        <div className="absolute inset-0 z-40 bg-slate-900/40 flex items-center justify-center p-4">
+          <div className="bg-white border border-slate-200 rounded-lg p-8 max-w-md w-full shadow-xl">
+            {loadError ? (
+              <>
+                <h2 className="text-lg font-bold text-slate-900">Could not load the interview</h2>
+                <p className="text-sm text-slate-500 mt-2">{loadError}</p>
+                <button
+                  onClick={() => navigate('/dashboard')}
+                  className="mt-6 w-full border border-slate-300 hover:bg-slate-50 text-slate-700 font-semibold py-2.5 rounded-md text-sm"
+                >
+                  Back to dashboard
+                </button>
+              </>
+            ) : (
+              <>
+                <h2 className="text-lg font-bold text-slate-900">Ready to begin?</h2>
+                <p className="text-sm text-slate-500 mt-2 leading-relaxed">
+                  The interviewer asks each question out loud. Answer naturally and pause when you are finished; the
+                  next question follows automatically. Your browser will ask for microphone access.
+                </p>
+                <button
+                  onClick={handleStartInterview}
+                  disabled={!currentQuestion}
+                  className="mt-6 w-full bg-[#FF6B00] hover:bg-[#E56000] disabled:opacity-50 text-white font-semibold py-2.5 rounded-md text-sm"
+                >
+                  {currentQuestion ? 'Begin interview' : 'Loading...'}
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
       <TextAnswerModal
         isOpen={isTextModalOpen}
         onClose={() => setIsTextModalOpen(false)}
         onSubmitText={handleTextAnswerSubmit}
-        questionText={currentQuestion.text}
+        questionText={currentQuestion?.text ?? ''}
       />
 
-      {/* Answer Hint Modal */}
       <AnswerHintModal
         isOpen={isHintModalOpen}
         onClose={() => setIsHintModalOpen(false)}
-        interviewId={id || 'demo-session-id'}
-        questionId={currentQuestion.id}
-        questionText={currentQuestion.text}
+        interviewId={id ?? ''}
+        questionId={currentQuestion?.id ?? ''}
+        questionText={currentQuestion?.text ?? ''}
       />
     </div>
   );

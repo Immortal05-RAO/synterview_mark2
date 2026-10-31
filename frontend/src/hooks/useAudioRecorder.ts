@@ -118,19 +118,24 @@ export const useAudioRecorder = (): UseAudioRecorderReturn => {
           const bufferLength = analyser.frequencyBinCount;
           const dataArray = new Uint8Array(bufferLength);
 
-          const updateWaveform = () => {
+          let lastUpdate = 0;
+          const updateWaveform = (now: number = performance.now()) => {
             if (analyserRef.current) {
-              analyserRef.current.getByteFrequencyData(dataArray);
-              setAudioDataArray(new Uint8Array(dataArray));
+              // ~12 updates/sec is plenty for the visualizer and avoids constant re-renders
+              if (now - lastUpdate >= 80) {
+                lastUpdate = now;
+                analyserRef.current.getByteFrequencyData(dataArray);
+                setAudioDataArray(new Uint8Array(dataArray));
 
-              // Compute average volume level (0-100)
-              let sum = 0;
-              for (let i = 0; i < bufferLength; i++) {
-                sum += dataArray[i];
+                // Compute average volume level (0-100)
+                let sum = 0;
+                for (let i = 0; i < bufferLength; i++) {
+                  sum += dataArray[i];
+                }
+                const average = sum / bufferLength;
+                const level = Math.min(100, Math.round((average / 128) * 100));
+                setVolumeLevel(level);
               }
-              const average = sum / bufferLength;
-              const level = Math.min(100, Math.round((average / 128) * 100));
-              setVolumeLevel(level);
 
               animationFrameRef.current = requestAnimationFrame(updateWaveform);
             }

@@ -47,3 +47,52 @@ def test_audio_upload_and_speech_metrics():
     assert a_data["completed"] is True
     assert "speechMetrics" in a_data
     assert "totalWords" in a_data["speechMetrics"]
+
+
+def test_audio_without_any_text_is_rejected_with_clear_error():
+    email = f"nospeech_{uuid.uuid4().hex[:8]}@synterview.ai"
+    token = client.post("/api/auth/register", json={
+        "name": "No Speech", "email": email, "password": "Password123!"
+    }).json()["accessToken"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    interview_id = client.post("/api/interviews", headers=headers, json={
+        "role": "Software Engineer", "experience": "Fresher", "difficulty": "Easy",
+        "interviewType": "Technical", "numberOfQuestions": 1
+    }).json()["interview"]["id"]
+    q_id = client.post(f"/api/interviews/{interview_id}/start", headers=headers).json()["question"]["id"]
+
+    resp = client.post(
+        f"/api/interviews/{interview_id}/answer",
+        headers=headers,
+        data={"questionId": q_id, "durationSeconds": "4"},
+        files={"audio": ("response.webm", io.BytesIO(b"\x00" * 5000), "audio/webm")},
+    )
+    assert resp.status_code == 422
+    assert resp.json()["error"]["code"] == "NO_SPEECH_DETECTED"
+
+
+def test_browser_transcript_is_used_when_server_stt_is_unavailable():
+    email = f"browserstt_{uuid.uuid4().hex[:8]}@synterview.ai"
+    token = client.post("/api/auth/register", json={
+        "name": "Browser STT", "email": email, "password": "Password123!"
+    }).json()["accessToken"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    interview_id = client.post("/api/interviews", headers=headers, json={
+        "role": "Software Engineer", "experience": "Fresher", "difficulty": "Easy",
+        "interviewType": "Technical", "numberOfQuestions": 1
+    }).json()["interview"]["id"]
+    q_id = client.post(f"/api/interviews/{interview_id}/start", headers=headers).json()["question"]["id"]
+
+    resp = client.post(
+        f"/api/interviews/{interview_id}/answer",
+        headers=headers,
+        data={"questionId": q_id, "answer": "An index lets the database find rows without scanning the whole table.", "durationSeconds": "8"},
+        files={"audio": ("response.webm", io.BytesIO(b"\x00" * 5000), "audio/webm")},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["completed"] is True
+    assert body["speechMetrics"]["durationSeconds"] == 8.0
+    assert body["speechMetrics"]["wordsPerMinute"] > 0

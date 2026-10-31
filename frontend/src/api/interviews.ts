@@ -117,19 +117,14 @@ export const interviewsApi = {
 
   submitAnswer: async (
     id: string,
-    payload: { questionId: string; answer?: string; audioFile?: Blob | File }
+    payload: { questionId: string; answer?: string; audioFile?: Blob | File; durationSeconds?: number }
   ): Promise<SubmitAnswerResponse> => {
     if (payload.audioFile) {
       const formData = new FormData();
       formData.append('questionId', payload.questionId);
       if (payload.answer) formData.append('answer', payload.answer);
+      if (payload.durationSeconds) formData.append('durationSeconds', String(payload.durationSeconds));
       formData.append('audio', payload.audioFile, 'answer.webm');
-
-      console.log('[UPLOAD DEBUG] Submitting audio FormData to /api/interviews/' + id + '/answer:', {
-        questionId: payload.questionId,
-        audioSizeBytes: payload.audioFile.size,
-        audioMimeType: payload.audioFile.type,
-      });
 
       // Do NOT explicitly set Content-Type header on FormData; browser automatically generates multipart boundary
       const res = await apiClient.post(`/interviews/${id}/answer`, formData);
@@ -138,6 +133,7 @@ export const interviewsApi = {
       const res = await apiClient.post(`/interviews/${id}/answer`, {
         questionId: payload.questionId,
         answer: payload.answer,
+        durationSeconds: payload.durationSeconds,
       });
       return res.data;
     }

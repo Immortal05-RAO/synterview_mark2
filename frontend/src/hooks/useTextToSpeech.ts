@@ -8,45 +8,46 @@ export interface UseTextToSpeechReturn {
   error: string | null;
 }
 
+const UNSUPPORTED_MESSAGE = "Voice playback isn't available in this browser. You can continue using the text question.";
+
 export const useTextToSpeech = (): UseTextToSpeechReturn => {
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isSupported, setIsSupported] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
-  const onEndCallbackRef = useRef<(() => void) | null>(null);
+  // The utterance that currently owns playback; callbacks from older utterances are ignored
+  const activeRef = useRef<SpeechSynthesisUtterance | null>(null);
 
   useEffect(() => {
     if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
       setIsSupported(false);
-      setError("Voice playback isn't available in this browser. You can continue using the text question.");
+      setError(UNSUPPORTED_MESSAGE);
     }
   }, []);
 
   const cancel = useCallback(() => {
+    activeRef.current = null;
     if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
       window.speechSynthesis.cancel();
     }
     setIsSpeaking(false);
-    utteranceRef.current = null;
-    onEndCallbackRef.current = null;
   }, []);
 
   const speak = useCallback((text: string, onEnd?: () => void) => {
     if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
       setIsSupported(false);
-      setError("Voice playback isn't available in this browser. You can continue using the text question.");
-      if (onEnd) onEnd();
+      setError(UNSUPPORTED_MESSAGE);
+      onEnd?.();
       return;
     }
 
-    // Always cancel any ongoing speech to prevent overlapping instances
+    const cleanText = text.trim();
+    activeRef.current = null;
     window.speechSynthesis.cancel();
     setError(null);
 
-    const cleanText = text.trim();
     if (!cleanText) {
-      if (onEnd) onEnd();
+      onEnd?.();
       return;
     }
 
@@ -54,33 +55,36 @@ export const useTextToSpeech = (): UseTextToSpeechReturn => {
     utterance.rate = 1.0;
     utterance.pitch = 1.0;
     utterance.lang = 'en-US';
+    activeRef.current = utterance;
 
-    onEndCallbackRef.current = onEnd || null;
-    utteranceRef.current = utterance;
+    let finished = false;
+    let safetyTimer: number | undefined;
+
+    // Finish exactly once, and only if this utterance is still the active one
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      window.clearTimeout(safetyTimer);
+      if (activeRef.current !== utterance) return;
+      activeRef.current = null;
+      setIsSpeaking(false);
+      onEnd?.();
+    };
 
     utterance.onstart = () => {
-      setIsSpeaking(true);
+      if (activeRef.current === utterance) setIsSpeaking(true);
     };
-
-    utterance.onend = () => {
-      setIsSpeaking(false);
-      if (onEndCallbackRef.current) {
-        onEndCallbackRef.current();
-        onEndCallbackRef.current = null;
-      }
-    };
-
+    utterance.onend = finish;
     utterance.onerror = (event) => {
-      console.warn('SpeechSynthesis error:', event);
-      setIsSpeaking(false);
-      if (event.error !== 'canceled') {
-        setError("Voice playback hit a minor error. Continuing with text.");
+      if (activeRef.current !== utterance) return;
+      if (event.error !== 'canceled' && event.error !== 'interrupted') {
+        setError('Voice playback hit a minor error. Continuing with text.');
       }
-      if (onEndCallbackRef.current) {
-        onEndCallbackRef.current();
-        onEndCallbackRef.current = null;
-      }
+      finish();
     };
+
+    // Some browsers never fire onend (e.g. no voices installed); never stall the conversation
+    safetyTimer = window.setTimeout(finish, Math.max(4000, cleanText.length * 120 + 3000));
 
     window.speechSynthesis.resume();
     window.speechSynthesis.speak(utterance);
@@ -88,17 +92,12 @@ export const useTextToSpeech = (): UseTextToSpeechReturn => {
 
   useEffect(() => {
     return () => {
+      activeRef.current = null;
       if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
         window.speechSynthesis.cancel();
       }
     };
   }, []);
 
-  return {
-    speak,
-    cancel,
-    isSpeaking,
-    isSupported,
-    error,
-  };
+  return { speak, cancel, isSpeaking, isSupported, error };
 };
