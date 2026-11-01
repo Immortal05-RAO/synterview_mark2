@@ -1,9 +1,13 @@
 import os
 import logging
+from dotenv import load_dotenv
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger("synterview")
+
+# The ElevenLabs SDK reads ELEVENLABS_API_KEY straight from the environment
+load_dotenv(".env")
 
 DEFAULT_JWT_SECRET = "synterview-super-secret-jwt-key-2026-demo"
 DEFAULT_JWT_REFRESH_SECRET = "synterview-super-secret-refresh-key-2026-demo"
@@ -30,6 +34,14 @@ class Settings(BaseSettings):
     SPEECH_PROVIDER: str = "openai"  # openai, local, fallback
     SPEECH_API_KEY: str = ""  # defaults to AI_API_KEY when AI_PROVIDER is openai
     WHISPER_MODEL: str = "tiny"  # model used by the local whisper provider
+
+    # Interviewer voices: ElevenLabs is used when ELEVENLABS_API_KEY is set (the key itself is read from the environment).
+    # Voice IDs come from your ElevenLabs voice library; override any of them in .env.
+    ELEVENLABS_MODEL: str = "eleven_flash_v2_5"  # low latency; use eleven_v4 for the highest quality
+    ELEVENLABS_VOICE_US_FEMALE: str = "EXAVITQu4vr4xnSDxMaL"  # Sarah
+    ELEVENLABS_VOICE_US_MALE: str = "cjVigY5qzO86Huf0OWal"  # Eric
+    ELEVENLABS_VOICE_INDIAN_FEMALE: str = "NaKPQmdr7mMxXuXrNeFC"  # Monika Sogam
+    ELEVENLABS_VOICE_INDIAN_MALE: str = "txk8uOzZ0iCh0B9mFSRG"  # Rahul S
 
     DEMO_MODE: bool = False
     CORS_ORIGIN: str = "*"

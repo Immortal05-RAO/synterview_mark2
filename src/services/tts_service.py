@@ -1,4 +1,5 @@
 import logging
+import os
 from typing import Optional
 
 import httpx
@@ -15,6 +16,52 @@ EDGE_VOICES = {
 OPENAI_VOICES = {"female": "nova", "male": "onyx"}
 
 MAX_CHARS = 1000
+
+# Voices the account cannot use (for example library voices on the free plan). Remembered so every later
+# request skips straight to the fallback voice instead of waiting for another failure.
+_unusable_voices: set[str] = set()
+
+
+def _elevenlabs_voice(gender: str, accent: str) -> str:
+    return {
+        ("us", "female"): settings.ELEVENLABS_VOICE_US_FEMALE,
+        ("us", "male"): settings.ELEVENLABS_VOICE_US_MALE,
+        ("indian", "female"): settings.ELEVENLABS_VOICE_INDIAN_FEMALE,
+        ("indian", "male"): settings.ELEVENLABS_VOICE_INDIAN_MALE,
+    }[(accent, gender)]
+
+
+async def _elevenlabs_tts(text: str, gender: str, accent: str) -> Optional[bytes]:
+    if not os.environ.get("ELEVENLABS_API_KEY"):
+        return None
+    voice_id = _elevenlabs_voice(gender, accent)
+    if voice_id in _unusable_voices:
+        return None
+    try:
+        from elevenlabs.client import AsyncElevenLabs
+
+        client = AsyncElevenLabs(timeout=8)
+        audio = bytearray()
+        async for chunk in client.text_to_speech.convert(
+            text=text,
+            voice_id=voice_id,
+            model_id=settings.ELEVENLABS_MODEL,
+            output_format="mp3_44100_128",
+        ):
+            audio.extend(chunk)
+        return bytes(audio) or None
+    except Exception as exc:
+        # Payment, auth and unknown-voice errors will not fix themselves, so stop retrying this voice
+        if getattr(exc, "status_code", None) in (401, 402, 403, 404):
+            _unusable_voices.add(voice_id)
+            logger.warning(
+                "ElevenLabs voice %s is not available on this account (HTTP %s); using the fallback voice.",
+                voice_id,
+                exc.status_code,
+            )
+        else:
+            logger.warning("ElevenLabs TTS failed, falling back: %s", exc)
+        return None
 
 
 async def _openai_tts(text: str, gender: str, accent: str) -> Optional[bytes]:
@@ -60,6 +107,9 @@ async def synthesize(text: str, gender: str, accent: str = "us") -> Optional[byt
         return None
     accent = accent if accent in EDGE_VOICES else "us"
     gender = gender if gender in ("female", "male") else "female"
+    eleven_audio = await _elevenlabs_tts(text, gender, accent)
+    if eleven_audio:
+        return eleven_audio
     # OpenAI voices have no Indian option, so an Indian accent goes straight to the Indian neural voices
     openai_audio = await _openai_tts(text, gender, accent) if accent == "us" else None
     return openai_audio or (await _edge_tts(text, gender, accent))
