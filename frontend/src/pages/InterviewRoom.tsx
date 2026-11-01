@@ -18,7 +18,7 @@ import { interviewsApi } from '../api/interviews';
 import type { Question, Evaluation, SpeechMetrics } from '../api/interviews';
 import { getApiError } from '../utils/apiError';
 import {
-  INTERVIEWER_NAME,
+  interviewerName,
   buildGreeting,
   buildWarmupReply,
   buildAcknowledgement,
@@ -90,7 +90,7 @@ export const InterviewRoomPage: React.FC = () => {
     setPhaseState(next);
   }, []);
 
-  const { speak, cancel: cancelTts, isSpeaking, error: ttsError, voiceGender, setVoiceGender, speechLevel } =
+  const { speak, cancel: cancelTts, isSpeaking, error: ttsError, voiceGender, setVoiceGender, accent, setAccent, speechLevel } =
     useTextToSpeech();
 
   const {
@@ -422,13 +422,13 @@ export const InterviewRoomPage: React.FC = () => {
     }
     // Only react to a voice change, not to callback identity changes
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [voiceGender]);
+  }, [voiceGender, accent]);
 
   const handleStartInterview = () => {
     if (!currentQuestion) return;
     setStage('warmup');
     setPhase('speaking');
-    speak(buildGreeting(INTERVIEWER_NAME[voiceGender], user?.name || '', roleTitle), () => {
+    speak(buildGreeting(interviewerName(voiceGender, accent), user?.name || '', roleTitle), () => {
       if (phaseRef.current === 'speaking') beginListening();
     });
   };
@@ -542,6 +542,8 @@ export const InterviewRoomPage: React.FC = () => {
             cameraError={cameraError}
             voiceGender={voiceGender}
             onVoiceGenderChange={setVoiceGender}
+            accent={accent}
+            onAccentChange={setAccent}
             speechLevel={speechLevel}
             status={aiStatus}
             isSpeaking={isSpeaking}
@@ -610,7 +612,7 @@ export const InterviewRoomPage: React.FC = () => {
                   <span className="text-xs font-semibold uppercase tracking-wide text-slate-500 block mb-1.5">
                     Choose your interviewer's voice
                   </span>
-                  <VoiceSelector value={voiceGender} onChange={setVoiceGender} />
+                  <VoiceSelector value={voiceGender} onChange={setVoiceGender} accent={accent} onAccentChange={setAccent} />
                 </div>
                 <button
                   onClick={handleStartInterview}

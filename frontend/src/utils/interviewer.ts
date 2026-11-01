@@ -1,6 +1,11 @@
-import type { VoiceGender } from '../hooks/useTextToSpeech';
+import type { VoiceAccent, VoiceGender } from '../hooks/useTextToSpeech';
 
-export const INTERVIEWER_NAME: Record<VoiceGender, string> = { female: 'Sarah', male: 'Alex' };
+const INTERVIEWER_NAMES: Record<VoiceAccent, Record<VoiceGender, string>> = {
+  us: { female: 'Sarah', male: 'Alex' },
+  indian: { female: 'Priya', male: 'Arjun' },
+};
+
+export const interviewerName = (gender: VoiceGender, accent: VoiceAccent) => INTERVIEWER_NAMES[accent][gender];
 
 // Avoid saying the same line twice in a row, which is what makes scripted voices feel robotic
 const lastPicked = new Map<string, number>();

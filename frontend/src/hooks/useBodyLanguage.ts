@@ -286,7 +286,8 @@ export const useBodyLanguage = ({ videoRef, enabled, collecting }: Options): Use
         if (buf.length > MOTION_WINDOW) buf.shift();
       });
       const movement = std(motionX) + std(motionY) + std(motionRoll) / 20 + std(shoulderX) * 0.5;
-      const steadiness = ramp(movement, 0.04, 0.35);
+      // Talking naturally moves the head a little, so only large, sustained movement counts as fidgeting
+      const steadiness = ramp(movement, 0.12, 0.9);
 
       // Expression: a relaxed, slightly warm face scores best; tension (frown, pressed lips) scores lower
       const smile = (shape('mouthSmileLeft') + shape('mouthSmileRight')) / 2;

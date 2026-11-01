@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 import { apiClient } from '../api/client';
 
 export type VoiceGender = 'female' | 'male';
+export type VoiceAccent = 'us' | 'indian';
 
 export interface UseTextToSpeechReturn {
   speak: (text: string, onEnd?: () => void) => void;
@@ -11,6 +12,8 @@ export interface UseTextToSpeechReturn {
   error: string | null;
   voiceGender: VoiceGender;
   setVoiceGender: (gender: VoiceGender) => void;
+  accent: VoiceAccent;
+  setAccent: (accent: VoiceAccent) => void;
   voiceName: string | null;
   /** 0-1 loudness of the interviewer's voice while speaking, for lip sync; null when unknown */
   speechLevel: number | null;
@@ -18,6 +21,7 @@ export interface UseTextToSpeechReturn {
 
 const UNSUPPORTED_MESSAGE = "Voice playback isn't available in this browser. You can continue using the text question.";
 const STORAGE_KEY = 'synterview_voice_gender';
+const ACCENT_STORAGE_KEY = 'synterview_voice_accent';
 
 // Browsers do not expose a voice's gender, so match well-known voice names across Chrome, Edge, Safari and Windows.
 const FEMALE_HINTS = [
@@ -62,11 +66,20 @@ const readStoredGender = (): VoiceGender => {
   }
 };
 
+const readStoredAccent = (): VoiceAccent => {
+  try {
+    return localStorage.getItem(ACCENT_STORAGE_KEY) === 'indian' ? 'indian' : 'us';
+  } catch {
+    return 'us';
+  }
+};
+
 export const useTextToSpeech = (): UseTextToSpeechReturn => {
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isSupported, setIsSupported] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [voiceGender, setVoiceGenderState] = useState<VoiceGender>(readStoredGender);
+  const [accent, setAccentState] = useState<VoiceAccent>(readStoredAccent);
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
 
   // The utterance that currently owns playback; callbacks from older utterances are ignored
@@ -79,7 +92,9 @@ export const useTextToSpeech = (): UseTextToSpeechReturn => {
   const [speechLevel, setSpeechLevel] = useState<number | null>(null);
   const genderRef = useRef<VoiceGender>(voiceGender);
   const voicesRef = useRef<SpeechSynthesisVoice[]>([]);
+  const accentRef = useRef<VoiceAccent>(accent);
   genderRef.current = voiceGender;
+  accentRef.current = accent;
   voicesRef.current = voices;
 
   useEffect(() => {
@@ -100,6 +115,15 @@ export const useTextToSpeech = (): UseTextToSpeechReturn => {
     setVoiceGenderState(gender);
     try {
       localStorage.setItem(STORAGE_KEY, gender);
+    } catch {
+      // Preference simply will not persist
+    }
+  }, []);
+
+  const setAccent = useCallback((next: VoiceAccent) => {
+    setAccentState(next);
+    try {
+      localStorage.setItem(ACCENT_STORAGE_KEY, next);
     } catch {
       // Preference simply will not persist
     }
@@ -182,12 +206,12 @@ export const useTextToSpeech = (): UseTextToSpeechReturn => {
     window.speechSynthesis.speak(utterance);
   }, []);
 
-  const fetchNeuralAudio = useCallback(async (text: string, gender: VoiceGender): Promise<Blob | null> => {
-    const cacheKey = `${gender}:${text}`;
+  const fetchNeuralAudio = useCallback(async (text: string, gender: VoiceGender, voiceAccent: VoiceAccent): Promise<Blob | null> => {
+    const cacheKey = `${voiceAccent}:${gender}:${text}`;
     const cached = audioCacheRef.current.get(cacheKey);
     if (cached) return cached;
     try {
-      const res = await apiClient.post('/tts', { text, gender }, { responseType: 'blob', timeout: 20000 });
+      const res = await apiClient.post('/tts', { text, gender, accent: voiceAccent }, { responseType: 'blob', timeout: 20000 });
       if (res.status !== 200 || !res.data || res.data.size === 0) return null;
       audioCacheRef.current.set(cacheKey, res.data);
       return res.data as Blob;
@@ -211,7 +235,7 @@ export const useTextToSpeech = (): UseTextToSpeechReturn => {
         return;
       }
 
-      fetchNeuralAudio(cleanText, genderRef.current).then((blob) => {
+      fetchNeuralAudio(cleanText, genderRef.current, accentRef.current).then((blob) => {
         if (playbackRef.current !== myPlayback) return;
         if (!blob) {
           speakWithBrowser(cleanText, onEnd);
@@ -295,5 +319,5 @@ export const useTextToSpeech = (): UseTextToSpeechReturn => {
 
   const voiceName = pickVoice(voices, voiceGender)?.name ?? null;
 
-  return { speak, cancel, isSpeaking, isSupported, error, voiceGender, setVoiceGender, voiceName, speechLevel };
+  return { speak, cancel, isSpeaking, isSupported, error, voiceGender, setVoiceGender, accent, setAccent, voiceName, speechLevel };
 };

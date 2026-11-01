@@ -11,11 +11,12 @@ router = APIRouter(prefix="/api/tts", tags=["Speech"])
 class TTSRequest(BaseModel):
     text: str = Field(..., min_length=1, max_length=MAX_CHARS)
     gender: str = "female"
+    accent: str = "us"
 
 
 @router.post("")
 async def text_to_speech(payload: TTSRequest, current_user: User = Depends(get_current_user)):
-    audio = await synthesize(payload.text, payload.gender)
+    audio = await synthesize(payload.text, payload.gender, payload.accent)
     if not audio:
         # 204 tells the client to use the browser's own voice instead
         return Response(status_code=status.HTTP_204_NO_CONTENT)

@@ -2,8 +2,8 @@ import React from 'react';
 import { Mic, MicOff, Video, VideoOff, Volume2, Keyboard, PhoneOff, Pause, Play } from 'lucide-react';
 import { InterviewerAvatar } from './InterviewerAvatar';
 import { VoiceSelector } from './VoiceSelector';
-import type { VoiceGender } from '../../hooks/useTextToSpeech';
-import { INTERVIEWER_NAME } from '../../utils/interviewer';
+import type { VoiceAccent, VoiceGender } from '../../hooks/useTextToSpeech';
+import { interviewerName } from '../../utils/interviewer';
 
 interface VideoCallStageProps {
   candidateName: string;
@@ -14,6 +14,8 @@ interface VideoCallStageProps {
 
   voiceGender: VoiceGender;
   onVoiceGenderChange: (gender: VoiceGender) => void;
+  accent: VoiceAccent;
+  onAccentChange: (accent: VoiceAccent) => void;
   speechLevel?: number | null;
 
   status: 'Listening' | 'Thinking' | 'Speaking' | 'Ready';
@@ -46,6 +48,8 @@ export const VideoCallStage: React.FC<VideoCallStageProps> = ({
   cameraError,
   voiceGender,
   onVoiceGenderChange,
+  accent,
+  onAccentChange,
   speechLevel = null,
   status,
   isSpeaking,
@@ -64,7 +68,7 @@ export const VideoCallStage: React.FC<VideoCallStageProps> = ({
   onOpenTextModal,
   onLeave,
 }) => {
-  const interviewerName = INTERVIEWER_NAME[voiceGender];
+  const name = interviewerName(voiceGender, accent);
   const shownStatus = isSpeaking ? 'Speaking' : status;
   const mins = Math.floor(recordingSeconds / 60);
   const secs = String(recordingSeconds % 60).padStart(2, '0');
@@ -88,7 +92,7 @@ export const VideoCallStage: React.FC<VideoCallStageProps> = ({
                 : 'bg-slate-400'
             }`}
           />
-          <span>{interviewerName} · Interviewer</span>
+          <span>{name} · Interviewer</span>
           <span className="text-slate-300">{shownStatus}</span>
         </div>
 
@@ -201,7 +205,7 @@ export const VideoCallStage: React.FC<VideoCallStageProps> = ({
         </div>
 
         <div className="flex items-center gap-3">
-          <VoiceSelector value={voiceGender} onChange={onVoiceGenderChange} />
+          <VoiceSelector value={voiceGender} onChange={onVoiceGenderChange} accent={accent} onAccentChange={onAccentChange} />
           <button
             onClick={onLeave}
             className={`${controlButton} bg-red-600 border-red-600 text-white hover:bg-red-700`}
