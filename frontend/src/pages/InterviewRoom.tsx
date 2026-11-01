@@ -40,6 +40,7 @@ const THINK_PAUSE_MS = 700;
 const MAX_ANSWER_MS = 150_000;
 const NO_SPEECH_TIMEOUT_MS = 20_000;
 const VOLUME_THRESHOLD = 10;
+const NOISE_CALIBRATION_MS = 1000;
 const MAX_NO_SPEECH_RETRIES = 2;
 
 export const InterviewRoomPage: React.FC = () => {
@@ -71,7 +72,7 @@ export const InterviewRoomPage: React.FC = () => {
   const followUpsRef = useRef(0);
   const answerPartsRef = useRef<string[]>([]);
   const answerSecondsRef = useRef(0);
-  const turnRef = useRef({ start: 0, lastActivity: 0, lastText: '', speechMs: 0 });
+  const turnRef = useRef({ start: 0, lastActivity: 0, lastText: '', speechMs: 0, noiseSum: 0, noiseCount: 0 });
 
   // Camera is shared by the self-view and the body language analysis
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -208,7 +209,7 @@ export const InterviewRoomPage: React.FC = () => {
     resetTranscript();
     setPipelineError(null);
     const now = Date.now();
-    turnRef.current = { start: now, lastActivity: now, lastText: '', speechMs: 0 };
+    turnRef.current = { start: now, lastActivity: now, lastText: '', speechMs: 0, noiseSum: 0, noiseCount: 0 };
 
     const granted = await startRecording();
     if (!granted) {
@@ -385,7 +386,18 @@ export const InterviewRoomPage: React.FC = () => {
         turn.lastText = text;
         turn.lastActivity = now;
       }
-      if (volumeRef.current > VOLUME_THRESHOLD) {
+
+      // Learn the room's background noise from the first second, so a noisy room or fan is not mistaken for speech
+      if (now - turn.start < NOISE_CALIBRATION_MS) {
+        turn.noiseSum += volumeRef.current;
+        turn.noiseCount += 1;
+      }
+      const noiseFloor = turn.noiseCount ? turn.noiseSum / turn.noiseCount : 0;
+      const loud = volumeRef.current > Math.max(VOLUME_THRESHOLD, noiseFloor * 1.5 + 4);
+
+      // Once live transcription is producing words, the words decide when you have finished; loudness
+      // is only a fallback for browsers without transcription
+      if (text.length === 0 && loud) {
         turn.speechMs += 200;
         turn.lastActivity = now;
       }
