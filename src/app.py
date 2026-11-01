@@ -7,7 +7,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from src.config import settings
 from src.database import init_db
-from src.routes import auth_router, interviews_router, health_router
+from src.routes import auth_router, interviews_router, health_router, tts_router
 from src.middleware import (
     APIException,
     api_exception_handler,
@@ -69,6 +69,7 @@ app.add_exception_handler(Exception, unhandled_exception_handler)
 app.include_router(health_router)
 app.include_router(auth_router)
 app.include_router(interviews_router)
+app.include_router(tts_router)
 
 
 @app.get("/", tags=["Root"])

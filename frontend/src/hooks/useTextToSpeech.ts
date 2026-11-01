@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
+import { apiClient } from '../api/client';
 
 export type VoiceGender = 'female' | 'male';
 
@@ -11,6 +12,8 @@ export interface UseTextToSpeechReturn {
   voiceGender: VoiceGender;
   setVoiceGender: (gender: VoiceGender) => void;
   voiceName: string | null;
+  /** 0-1 loudness of the interviewer's voice while speaking, for lip sync; null when unknown */
+  speechLevel: number | null;
 }
 
 const UNSUPPORTED_MESSAGE = "Voice playback isn't available in this browser. You can continue using the text question.";
@@ -68,6 +71,12 @@ export const useTextToSpeech = (): UseTextToSpeechReturn => {
 
   // The utterance that currently owns playback; callbacks from older utterances are ignored
   const activeRef = useRef<SpeechSynthesisUtterance | null>(null);
+  // Neural voice playback: a counter invalidates requests/audio that were superseded or cancelled
+  const playbackRef = useRef(0);
+  const stopAudioRef = useRef<() => void>(() => {});
+  const audioCacheRef = useRef<Map<string, Blob>>(new Map());
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const [speechLevel, setSpeechLevel] = useState<number | null>(null);
   const genderRef = useRef<VoiceGender>(voiceGender);
   const voicesRef = useRef<SpeechSynthesisVoice[]>([]);
   genderRef.current = voiceGender;
@@ -97,6 +106,8 @@ export const useTextToSpeech = (): UseTextToSpeechReturn => {
   }, []);
 
   const cancel = useCallback(() => {
+    playbackRef.current += 1;
+    stopAudioRef.current();
     activeRef.current = null;
     if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
       window.speechSynthesis.cancel();
@@ -104,7 +115,7 @@ export const useTextToSpeech = (): UseTextToSpeechReturn => {
     setIsSpeaking(false);
   }, []);
 
-  const speak = useCallback((text: string, onEnd?: () => void) => {
+  const speakWithBrowser = useCallback((text: string, onEnd?: () => void) => {
     if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
       setIsSupported(false);
       setError(UNSUPPORTED_MESSAGE);
@@ -171,8 +182,110 @@ export const useTextToSpeech = (): UseTextToSpeechReturn => {
     window.speechSynthesis.speak(utterance);
   }, []);
 
+  const fetchNeuralAudio = useCallback(async (text: string, gender: VoiceGender): Promise<Blob | null> => {
+    const cacheKey = `${gender}:${text}`;
+    const cached = audioCacheRef.current.get(cacheKey);
+    if (cached) return cached;
+    try {
+      const res = await apiClient.post('/tts', { text, gender }, { responseType: 'blob', timeout: 20000 });
+      if (res.status !== 200 || !res.data || res.data.size === 0) return null;
+      audioCacheRef.current.set(cacheKey, res.data);
+      return res.data as Blob;
+    } catch {
+      return null;
+    }
+  }, []);
+
+  // Natural neural voice from the server; falls back to the browser's built-in voice if unavailable
+  const speak = useCallback(
+    (text: string, onEnd?: () => void) => {
+      const cleanText = text.trim();
+      const myPlayback = ++playbackRef.current;
+      stopAudioRef.current();
+      activeRef.current = null;
+      if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+      setError(null);
+
+      if (!cleanText) {
+        onEnd?.();
+        return;
+      }
+
+      fetchNeuralAudio(cleanText, genderRef.current).then((blob) => {
+        if (playbackRef.current !== myPlayback) return;
+        if (!blob) {
+          speakWithBrowser(cleanText, onEnd);
+          return;
+        }
+
+        const url = URL.createObjectURL(blob);
+        const audio = new Audio(url);
+        let raf = 0;
+        let done = false;
+
+        const stop = () => {
+          cancelAnimationFrame(raf);
+          audio.pause();
+          URL.revokeObjectURL(url);
+          setIsSpeaking(false);
+          setSpeechLevel(null);
+        };
+        stopAudioRef.current = stop;
+
+        const finish = (completed: boolean) => {
+          if (done) return;
+          done = true;
+          stop();
+          stopAudioRef.current = () => {};
+          if (completed && playbackRef.current === myPlayback) onEnd?.();
+        };
+
+        // Drive the mouth from the real audio loudness
+        try {
+          const ctx = audioCtxRef.current ?? new AudioContext();
+          audioCtxRef.current = ctx;
+          const source = ctx.createMediaElementSource(audio);
+          const analyser = ctx.createAnalyser();
+          analyser.fftSize = 256;
+          source.connect(analyser);
+          analyser.connect(ctx.destination);
+          const data = new Uint8Array(analyser.frequencyBinCount);
+          let last = 0;
+          const tick = (now: number) => {
+            raf = requestAnimationFrame(tick);
+            if (now - last < 50) return;
+            last = now;
+            analyser.getByteFrequencyData(data);
+            let sum = 0;
+            for (let i = 0; i < 40; i++) sum += data[i];
+            setSpeechLevel(Math.min(1, sum / 40 / 140));
+          };
+          raf = requestAnimationFrame(tick);
+        } catch {
+          // Lip sync falls back to the random mouth movement; audio still plays
+        }
+
+        audio.onplay = () => setIsSpeaking(true);
+        audio.onended = () => finish(true);
+        audio.onerror = () => {
+          if (playbackRef.current !== myPlayback) return;
+          finish(false);
+          speakWithBrowser(cleanText, onEnd);
+        };
+        audio.play().catch(() => {
+          if (playbackRef.current !== myPlayback) return;
+          finish(false);
+          speakWithBrowser(cleanText, onEnd);
+        });
+      });
+    },
+    [fetchNeuralAudio, speakWithBrowser]
+  );
+
   useEffect(() => {
     return () => {
+      playbackRef.current += 1;
+      stopAudioRef.current();
       activeRef.current = null;
       if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
         window.speechSynthesis.cancel();
@@ -182,5 +295,5 @@ export const useTextToSpeech = (): UseTextToSpeechReturn => {
 
   const voiceName = pickVoice(voices, voiceGender)?.name ?? null;
 
-  return { speak, cancel, isSpeaking, isSupported, error, voiceGender, setVoiceGender, voiceName };
+  return { speak, cancel, isSpeaking, isSupported, error, voiceGender, setVoiceGender, voiceName, speechLevel };
 };

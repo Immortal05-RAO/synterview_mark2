@@ -67,6 +67,15 @@ export const LiveScoring: React.FC<LiveScoringProps> = ({
         </p>
       </div>
 
+      {evaluation?.feedback && (
+        <div className="px-5 py-4 border-b border-slate-200 flex-shrink-0">
+          <div className="border-l-2 border-[#FF6B00] pl-3">
+            <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Feedback</span>
+            <p className="text-sm text-slate-700 mt-1 leading-relaxed">{evaluation.feedback}</p>
+          </div>
+        </div>
+      )}
+
       <div className="px-5 py-4 space-y-3 border-b border-slate-200 flex-shrink-0">
         <ScoreRow label="Technical" value={evaluation?.technicalScore ?? null} />
         <ScoreRow label="Relevance" value={evaluation?.relevanceScore ?? null} />

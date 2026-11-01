@@ -1,8 +1,8 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Mic, Clock, X, AlertCircle } from 'lucide-react';
-import { CandidatePanel } from '../components/room/CandidatePanel';
-import { AIInterviewer } from '../components/room/AIInterviewer';
+import { VideoCallStage } from '../components/room/VideoCallStage';
+import { BodyLanguagePanel } from '../components/room/BodyLanguagePanel';
 import { LiveScoring } from '../components/room/LiveScoring';
 import { TextAnswerModal } from '../components/room/TextAnswerModal';
 import { AnswerHintModal } from '../components/room/AnswerHintModal';
@@ -10,28 +10,37 @@ import { VoiceSelector } from '../components/room/VoiceSelector';
 import { useAudioRecorder } from '../hooks/useAudioRecorder';
 import { useSpeechRecognition } from '../hooks/useSpeechRecognition';
 import { useTextToSpeech } from '../hooks/useTextToSpeech';
+import { useBodyLanguage } from '../hooks/useBodyLanguage';
+import type { BodySummary } from '../hooks/useBodyLanguage';
+import { saveBodyLanguage } from '../utils/bodyLanguageStore';
 import { useAuth } from '../context/AuthContext';
 import { interviewsApi } from '../api/interviews';
 import type { Question, Evaluation, SpeechMetrics } from '../api/interviews';
 import { getApiError } from '../utils/apiError';
+import {
+  INTERVIEWER_NAME,
+  buildGreeting,
+  buildWarmupReply,
+  buildAcknowledgement,
+  buildFollowUp,
+  buildClosingPrompt,
+  buildClosingReply,
+} from '../utils/interviewer';
 
 type Phase = 'idle' | 'speaking' | 'listening' | 'processing' | 'paused' | 'finished';
+// warmup: greeting and small talk, question: the interview proper, closing: candidate's own questions
+type Stage = 'warmup' | 'question' | 'closing';
 
 // Hands-free turn taking: the answer ends once the candidate has spoken and then gone quiet.
 const SILENCE_MS = 2500;
+const CHAT_SILENCE_MS = 1800; // small talk at the start and end ends sooner than a real answer
+const CHAT_NO_SPEECH_MS = 9_000;
+const SHORT_ANSWER_WORDS = 22; // shorter answers get one follow-up, like a real interviewer would ask
+const THINK_PAUSE_MS = 700;
 const MAX_ANSWER_MS = 150_000;
 const NO_SPEECH_TIMEOUT_MS = 20_000;
 const VOLUME_THRESHOLD = 10;
 const MAX_NO_SPEECH_RETRIES = 2;
-
-// Short spoken reaction to the answer so the conversation feels continuous
-const buildAcknowledgement = (evaluation: Evaluation): string => {
-  const score = evaluation.overallScore;
-  const opener = score >= 80 ? 'Great answer.' : score >= 60 ? 'Thanks, that was a solid answer.' : 'Okay, thank you.';
-  const tip = evaluation.improvements?.[0];
-  const trimmedTip = tip && tip.length <= 120 ? ` One thing to work on: ${tip.replace(/\.$/, '')}.` : '';
-  return `${opener}${trimmedTip} Next question.`;
-};
 
 export const InterviewRoomPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -46,7 +55,6 @@ export const InterviewRoomPage: React.FC = () => {
   const [latestEvaluation, setLatestEvaluation] = useState<Evaluation | null>(null);
   const [latestSpeechMetrics, setLatestSpeechMetrics] = useState<SpeechMetrics | null>(null);
   const [latestTranscript, setLatestTranscript] = useState<string | null>(null);
-  const [feedbackFeed, setFeedbackFeed] = useState<string[]>(['Session initialized', 'Question generated']);
 
   const [phase, setPhaseState] = useState<Phase>('idle');
   const [isTextModalOpen, setIsTextModalOpen] = useState(false);
@@ -58,23 +66,36 @@ export const InterviewRoomPage: React.FC = () => {
   const phaseRef = useRef<Phase>('idle');
   const questionRef = useRef<Question | null>(null);
   const noSpeechRetriesRef = useRef(0);
+  const [stage, setStageState] = useState<Stage>('warmup');
+  const stageRef = useRef<Stage>('warmup');
+  const followUpsRef = useRef(0);
+  const answerPartsRef = useRef<string[]>([]);
+  const answerSecondsRef = useRef(0);
   const turnRef = useRef({ start: 0, lastActivity: 0, lastText: '', speechMs: 0 });
+
+  // Camera is shared by the self-view and the body language analysis
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const [cameraOn, setCameraOn] = useState(true);
+  const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
+  const [cameraError, setCameraError] = useState<string | null>(null);
+  const answerSummariesRef = useRef<BodySummary[]>([]);
+
+  const setStage = useCallback((next: Stage) => {
+    stageRef.current = next;
+    setStageState(next);
+  }, []);
 
   const setPhase = useCallback((next: Phase) => {
     phaseRef.current = next;
     setPhaseState(next);
   }, []);
 
-  const { speak, cancel: cancelTts, isSpeaking, error: ttsError, voiceGender, setVoiceGender, voiceName } =
+  const { speak, cancel: cancelTts, isSpeaking, error: ttsError, voiceGender, setVoiceGender, speechLevel } =
     useTextToSpeech();
 
   const {
-    micState,
-    isRecording,
     duration,
     volumeLevel,
-    audioDataArray,
-    mimeTypeUsed,
     startRecording,
     stopRecording,
     resetRecording,
@@ -84,11 +105,61 @@ export const InterviewRoomPage: React.FC = () => {
   const {
     transcript: liveFinalTranscript,
     interimTranscript,
-    isSupported: isSpeechRecognitionSupported,
     startListening,
     stopListening,
     resetTranscript,
   } = useSpeechRecognition();
+
+  useEffect(() => {
+    if (!cameraOn) {
+      setCameraStream(null);
+      return;
+    }
+    let cancelled = false;
+    let stream: MediaStream | null = null;
+    navigator.mediaDevices
+      ?.getUserMedia({ video: { width: 640, height: 480, facingMode: 'user' }, audio: false })
+      .then((s) => {
+        if (cancelled) {
+          s.getTracks().forEach((track) => track.stop());
+          return;
+        }
+        stream = s;
+        setCameraError(null);
+        setCameraStream(s);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setCameraError('Camera unavailable. Check browser permissions.');
+        setCameraOn(false);
+      });
+    return () => {
+      cancelled = true;
+      stream?.getTracks().forEach((track) => track.stop());
+    };
+  }, [cameraOn]);
+
+  // The <video> mounts after the stream arrives, so attach once both exist
+  useEffect(() => {
+    const video = videoRef.current;
+    if (video && cameraStream && video.srcObject !== cameraStream) {
+      video.srcObject = cameraStream;
+    }
+  }, [cameraStream, cameraOn]);
+
+  const bodyLanguage = useBodyLanguage({
+    videoRef,
+    enabled: cameraOn && cameraStream !== null,
+    collecting: phase === 'listening' && stage === 'question',
+  });
+  const { takeAnswerSummary, getSessionSummary } = bodyLanguage;
+
+  // Stores this answer's body language so the report can show it
+  const recordBodyLanguage = useCallback(() => {
+    const summary = takeAnswerSummary();
+    if (summary) answerSummariesRef.current = [...answerSummariesRef.current, summary];
+    if (id) saveBodyLanguage(id, { answers: answerSummariesRef.current, session: getSessionSummary() });
+  }, [id, takeAnswerSummary, getSessionSummary]);
 
   const combinedLiveTranscript = (liveFinalTranscript + ' ' + interimTranscript).trim();
 
@@ -148,17 +219,33 @@ export const InterviewRoomPage: React.FC = () => {
     setPhase('listening');
   }, [resetTranscript, startRecording, startListening, setPhase]);
 
-  // Speak (optionally with an intro), then automatically start listening for the answer
-  const askQuestion = useCallback(
-    (question: Question, intro = '') => {
-      questionRef.current = question;
-      setCurrentQuestion(question);
-      setPhase('speaking');
-      speak(`${intro} ${question.text}`.trim(), () => {
-        if (phaseRef.current === 'speaking') beginListening();
-      });
+  // Speak after a short natural pause, then automatically start listening
+  const sayThenListen = useCallback(
+    (text: string, pauseMs = THINK_PAUSE_MS) => {
+      setPhase('processing');
+      window.setTimeout(() => {
+        if (phaseRef.current !== 'processing') return; // paused or left in the meantime
+        setPhase('speaking');
+        speak(text, () => {
+          if (phaseRef.current === 'speaking') beginListening();
+        });
+      }, pauseMs);
     },
     [speak, beginListening, setPhase]
+  );
+
+  // Ask a question (optionally after a spoken reaction to the previous answer)
+  const askQuestion = useCallback(
+    (question: Question, intro = '', pauseMs = THINK_PAUSE_MS) => {
+      questionRef.current = question;
+      setCurrentQuestion(question);
+      setStage('question');
+      followUpsRef.current = 0;
+      answerPartsRef.current = [];
+      answerSecondsRef.current = 0;
+      sayThenListen(`${intro} ${question.text}`.trim(), intro ? pauseMs : 0);
+    },
+    [sayThenListen, setStage]
   );
 
   const handleNoSpeech = useCallback(() => {
@@ -192,21 +279,18 @@ export const InterviewRoomPage: React.FC = () => {
         setLatestEvaluation(res.evaluation);
         if (res.speechMetrics) setLatestSpeechMetrics(res.speechMetrics);
         setLatestTranscript(res.transcript || payload.answer || null);
-        setFeedbackFeed((prev) => [
-          ...prev,
-          `✓ Answer ${questionNumber} evaluated (Score: ${res.evaluation.overallScore}/100)`,
-        ]);
+        recordBodyLanguage();
         resetRecording();
         resetTranscript();
 
         if (res.completed) {
-          setPhase('finished');
-          speak('That was the last question. Thank you, I am preparing your report now.', () => {
-            navigate(`/interview/${id}/complete`);
-          });
+          // Let the candidate ask their own questions before saying goodbye
+          setStage('closing');
+          sayThenListen(buildClosingPrompt());
         } else if (res.nextQuestion) {
           setQuestionNumber((prev) => prev + 1);
-          askQuestion(res.nextQuestion, buildAcknowledgement(res.evaluation));
+          const isLast = questionNumber + 1 >= totalQuestions;
+          askQuestion(res.nextQuestion, buildAcknowledgement(res.evaluation.overallScore, isLast));
         }
       } catch (err) {
         const { code, message } = getApiError(err);
@@ -219,10 +303,10 @@ export const InterviewRoomPage: React.FC = () => {
         }
       }
     },
-    [id, questionNumber, resetRecording, resetTranscript, speak, navigate, askQuestion, handleNoSpeech, setPhase]
+    [id, questionNumber, totalQuestions, resetRecording, resetTranscript, sayThenListen, askQuestion, handleNoSpeech, setPhase, setStage, recordBodyLanguage]
   );
 
-  // Called when the silence monitor decides the candidate has finished answering
+  // Called when the silence monitor decides the candidate has finished speaking
   const finishAnswer = useCallback(async () => {
     if (phaseRef.current !== 'listening') return;
     setPhase('processing');
@@ -232,12 +316,61 @@ export const InterviewRoomPage: React.FC = () => {
     stopListening();
     const blob = await stopRecording();
 
+    // Small talk at the start and end is part of the conversation but is not scored
+    if (stageRef.current === 'warmup') {
+      resetRecording();
+      const first = questionRef.current;
+      if (first) askQuestion(first, buildWarmupReply(spoken, totalQuestions));
+      return;
+    }
+    if (stageRef.current === 'closing') {
+      resetRecording();
+      setPhase('speaking');
+      speak(buildClosingReply(spoken), () => {
+        setPhase('finished');
+        if (id) navigate(`/interview/${id}/complete`);
+      });
+      return;
+    }
+
     if (!blob && !spoken) {
       handleNoSpeech();
       return;
     }
-    await submitTurn({ answer: spoken, audio: blob, seconds });
-  }, [stopListening, stopRecording, submitTurn, handleNoSpeech, setPhase]);
+
+    // A very short answer gets one gentle follow-up before it is scored
+    const wordCount = spoken ? spoken.split(/\s+/).length : 0;
+    answerSecondsRef.current += seconds;
+    if (spoken && wordCount < SHORT_ANSWER_WORDS && followUpsRef.current < 1) {
+      followUpsRef.current += 1;
+      answerPartsRef.current.push(spoken);
+      resetRecording();
+      sayThenListen(buildFollowUp());
+      return;
+    }
+
+    const parts = [...answerPartsRef.current, spoken].filter(Boolean);
+    const hadFollowUp = answerPartsRef.current.length > 0;
+    await submitTurn({
+      answer: parts.join(' '),
+      // Separate recordings cannot be joined, so a follow-up answer is scored from the combined transcript
+      audio: hadFollowUp ? null : blob,
+      seconds: answerSecondsRef.current,
+    });
+  }, [
+    id,
+    navigate,
+    speak,
+    totalQuestions,
+    stopListening,
+    stopRecording,
+    resetRecording,
+    submitTurn,
+    handleNoSpeech,
+    askQuestion,
+    sayThenListen,
+    setPhase,
+  ]);
 
   // Silence monitor: end the answer once the candidate has spoken and then gone quiet
   useEffect(() => {
@@ -259,12 +392,15 @@ export const InterviewRoomPage: React.FC = () => {
 
       // Volume alone counts as speech too, in case live transcription is unavailable
       const heardSpeech = text.length > 0 || turn.speechMs >= 1500;
+      const chatting = stageRef.current !== 'question';
+      const silenceMs = chatting ? CHAT_SILENCE_MS : SILENCE_MS;
+      const noSpeechMs = chatting ? CHAT_NO_SPEECH_MS : NO_SPEECH_TIMEOUT_MS;
 
-      if (heardSpeech && now - turn.lastActivity >= SILENCE_MS) {
+      if (heardSpeech && now - turn.lastActivity >= silenceMs) {
         finishAnswer();
       } else if (now - turn.start >= MAX_ANSWER_MS) {
         finishAnswer();
-      } else if (!heardSpeech && now - turn.start >= NO_SPEECH_TIMEOUT_MS) {
+      } else if (!heardSpeech && now - turn.start >= noSpeechMs) {
         finishAnswer();
       }
     }, 200);
@@ -280,8 +416,8 @@ export const InterviewRoomPage: React.FC = () => {
       return;
     }
     if (phaseRef.current === 'idle') {
-      speak("Hi, I'll be your interviewer today. Let's start whenever you're ready.", () => {});
-    } else if (phaseRef.current === 'speaking' && questionRef.current) {
+      speak("Hi, I'll be your interviewer today. Let's start whenever you're ready.");
+    } else if (phaseRef.current === 'speaking' && stageRef.current === 'question' && questionRef.current) {
       askQuestion(questionRef.current);
     }
     // Only react to a voice change, not to callback identity changes
@@ -290,8 +426,11 @@ export const InterviewRoomPage: React.FC = () => {
 
   const handleStartInterview = () => {
     if (!currentQuestion) return;
-    setFeedbackFeed((prev) => [...prev, 'Voice conversation started']);
-    askQuestion(currentQuestion, 'Welcome to your mock interview. Let us begin.');
+    setStage('warmup');
+    setPhase('speaking');
+    speak(buildGreeting(INTERVIEWER_NAME[voiceGender], user?.name || '', roleTitle), () => {
+      if (phaseRef.current === 'speaking') beginListening();
+    });
   };
 
   const stopEverything = useCallback(() => {
@@ -303,7 +442,8 @@ export const InterviewRoomPage: React.FC = () => {
   const handleTogglePause = () => {
     if (phase === 'paused') {
       setPipelineError(null);
-      if (currentQuestion) askQuestion(currentQuestion, 'Let us continue.');
+      if (stageRef.current === 'question' && currentQuestion) askQuestion(currentQuestion, 'Alright, let us continue.', 300);
+      else beginListening();
     } else if (phase === 'speaking' || phase === 'listening') {
       stopEverything();
       setPhase('paused');
@@ -311,9 +451,9 @@ export const InterviewRoomPage: React.FC = () => {
   };
 
   const handleReplayQuestion = () => {
-    if (!currentQuestion || phase === 'processing' || phase === 'finished') return;
+    if (!currentQuestion || stage !== 'question' || phase === 'processing' || phase === 'finished') return;
     stopEverything();
-    askQuestion(currentQuestion);
+    askQuestion(currentQuestion, 'Sure, let me repeat that.', 300);
   };
 
   const handleTextAnswerSubmit = async (text: string) => {
@@ -332,19 +472,6 @@ export const InterviewRoomPage: React.FC = () => {
     const s = secs % 60;
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
   };
-
-  const sessionStateText =
-    phase === 'speaking'
-      ? 'Interviewer speaking'
-      : phase === 'listening'
-      ? 'Listening to you'
-      : phase === 'processing'
-      ? 'Evaluating answer'
-      : phase === 'paused'
-      ? 'Paused'
-      : phase === 'finished'
-      ? 'Finished'
-      : 'Ready to start';
 
   const aiStatus = phase === 'speaking' ? 'Speaking' : phase === 'listening' ? 'Listening' : phase === 'processing' ? 'Thinking' : 'Ready';
   const bannerMessage = pipelineError || ttsError;
@@ -406,56 +533,54 @@ export const InterviewRoomPage: React.FC = () => {
       )}
 
       <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-10 gap-5 p-5 overflow-y-auto lg:overflow-hidden">
-        <div className="lg:col-span-3 lg:min-h-0 lg:h-full">
-          <CandidatePanel
+        <div className="lg:col-span-7 lg:min-h-0 lg:h-full">
+          <VideoCallStage
             candidateName={user?.name || 'Candidate'}
-            micState={micState}
-            isRecording={isRecording}
-            recordingDuration={duration}
-            volumeLevel={volumeLevel}
-            audioDataArray={audioDataArray}
-            mimeTypeUsed={mimeTypeUsed}
-            isPaused={phase === 'paused'}
-            onTogglePause={handleTogglePause}
-            onOpenTextModal={() => setIsTextModalOpen(true)}
-            onLeaveSession={leave}
-            sessionStateText={sessionStateText}
-            errorMessage={micError}
+            videoRef={videoRef}
+            cameraOn={cameraOn}
+            onToggleCamera={() => setCameraOn((on) => !on)}
+            cameraError={cameraError}
+            voiceGender={voiceGender}
+            onVoiceGenderChange={setVoiceGender}
+            speechLevel={speechLevel}
+            status={aiStatus}
             isSpeaking={isSpeaking}
-          />
-        </div>
-
-        <div className="lg:col-span-4 lg:min-h-0 lg:h-full">
-          <AIInterviewer
-            questionText={currentQuestion?.text ?? (loadError ? '' : 'Loading your first question...')}
+            isListening={phase === 'listening'}
+            isPaused={phase === 'paused'}
             category={currentQuestion?.category}
             questionNumber={questionNumber}
             totalQuestions={totalQuestions}
-            status={aiStatus}
-            onReplayQuestion={handleReplayQuestion}
-            isSpeaking={isSpeaking}
-            isRecording={phase === 'listening'}
+            questionText={currentQuestion?.text ?? (loadError ? '' : 'Loading your first question...')}
             liveTranscript={combinedLiveTranscript}
-            finalTranscript={latestTranscript}
-            isSpeechRecognitionSupported={isSpeechRecognitionSupported}
-            feedbackFeed={feedbackFeed}
-            backendFeedback={latestEvaluation?.feedback}
-            voiceGender={voiceGender}
-            onVoiceGenderChange={setVoiceGender}
-            voiceName={voiceName}
+            volumeLevel={volumeLevel}
+            recordingSeconds={duration}
+            micError={micError}
+            onTogglePause={handleTogglePause}
+            onReplayQuestion={handleReplayQuestion}
+            onOpenTextModal={() => setIsTextModalOpen(true)}
+            onLeave={leave}
           />
         </div>
 
-        <div className="lg:col-span-3 lg:min-h-0 lg:h-full">
-          <LiveScoring
-            evaluation={latestEvaluation}
-            speechMetrics={latestSpeechMetrics}
-            transcriptText={latestTranscript}
-            questionNumber={questionNumber}
-            totalQuestions={totalQuestions}
-            onRevealIdealAnswer={() => setIsHintModalOpen(true)}
-            processingStep={phase === 'processing' ? 'Evaluating your answer...' : null}
+        <div className="lg:col-span-3 lg:min-h-0 lg:h-full flex flex-col gap-4 lg:overflow-y-auto">
+          <BodyLanguagePanel
+            status={bodyLanguage.status}
+            live={bodyLanguage.live}
+            faceDetected={bodyLanguage.faceDetected}
+            tip={bodyLanguage.tip}
+            cameraOn={cameraOn}
           />
+          <div className="flex-1 min-h-[420px]">
+            <LiveScoring
+              evaluation={latestEvaluation}
+              speechMetrics={latestSpeechMetrics}
+              transcriptText={latestTranscript}
+              questionNumber={questionNumber}
+              totalQuestions={totalQuestions}
+              onRevealIdealAnswer={() => setIsHintModalOpen(true)}
+              processingStep={phase === 'processing' ? 'Evaluating your answer...' : null}
+            />
+          </div>
         </div>
       </div>
 
@@ -485,7 +610,7 @@ export const InterviewRoomPage: React.FC = () => {
                   <span className="text-xs font-semibold uppercase tracking-wide text-slate-500 block mb-1.5">
                     Choose your interviewer's voice
                   </span>
-                  <VoiceSelector value={voiceGender} onChange={setVoiceGender} voiceName={voiceName} />
+                  <VoiceSelector value={voiceGender} onChange={setVoiceGender} />
                 </div>
                 <button
                   onClick={handleStartInterview}

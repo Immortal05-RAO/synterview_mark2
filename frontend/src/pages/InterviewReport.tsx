@@ -4,6 +4,8 @@ import { ArrowLeft, Download } from 'lucide-react';
 import { ScoreOverview } from '../components/report/ScoreOverview';
 import { SpeechAnalytics } from '../components/report/SpeechAnalytics';
 import { QuestionBreakdown } from '../components/report/QuestionBreakdown';
+import { BodyLanguageReport } from '../components/report/BodyLanguageReport';
+import { loadBodyLanguage } from '../utils/bodyLanguageStore';
 import { AIInsights } from '../components/report/AIInsights';
 import { interviewsApi } from '../api/interviews';
 import type { ReportData } from '../api/interviews';
@@ -39,6 +41,8 @@ export const InterviewReportPage: React.FC = () => {
 
     fetchReport();
   }, [id]);
+
+  const bodyLanguage = id ? loadBodyLanguage(id) : null;
 
   if (!loading && (error || !report)) {
     return (
@@ -87,6 +91,8 @@ export const InterviewReportPage: React.FC = () => {
 
       {/* Speech Analytics */}
       <SpeechAnalytics metrics={report.speechMetrics} />
+
+      {bodyLanguage && <BodyLanguageReport data={bodyLanguage} answerConfidence={report.confidenceScore} />}
 
       {/* AI Insights: Strengths, Improvements, Action Plan */}
       <AIInsights
